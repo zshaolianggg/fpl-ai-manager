@@ -1,8 +1,13 @@
 {
   "enabled": false,
-  "notes": "Optional override for changes the public FPL API cannot yet see before a deadline.",
+  "notes": "Optional override for draft/private changes the public FPL API cannot see yet. Copy this file to config/manual_state.json and set enabled=true.",
   "bank_tenths": null,
+  "team_value_tenths": null,
   "free_transfers": null,
   "chips_available": null,
-  "squad_player_ids": null
+  "squad_player_ids": null,
+  "squad_player_names": [
+    "Example Player 1",
+    "Example Player 2"
+  ]
 }

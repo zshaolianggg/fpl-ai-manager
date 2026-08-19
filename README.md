@@ -114,3 +114,35 @@ The workflow checks FPL hourly, but **does not call OpenAI outside the deadline 
 FPL's public JSON endpoints are operationally useful but should be treated as unofficial/unsupported. The client is intentionally isolated in `src/fpl_ai_manager/fpl.py` so endpoint changes are easy to repair.
 
 GitHub scheduled workflows can occasionally run late. The windows are intentionally broad enough to tolerate modest scheduler delay, and a GitHub Actions cache marker prevents duplicate scheduled emails for the same Gameweek/report type. Manual workflow-dispatch tests intentionally bypass this deduplication.
+
+## Squad-state verification and pre-GW1 drafts
+
+The public FPL picks endpoint only exposes a team after a Gameweek deadline has locked. Before the first deadline of the season, your live draft cannot be read from the unauthenticated public API even when the entry ID is known.
+
+The manager now adds a `state_check` to every AI snapshot and labels squad data as `verified`, `partial`, or `unavailable`, together with its source. After GW1 locks, the latest public 15 should normally be loaded automatically from `entry/<team_id>/event/<gw>/picks/`.
+
+For GW1 or any private changes made after the latest deadline, copy:
+
+```bash
+cp config/manual_state.example.json config/manual_state.json
+```
+
+Then set `enabled` to `true` and list your 15 players under `squad_player_names`. Names may be FPL display names such as `Saka` or full names such as `Erling Haaland`. You can also provide `bank_tenths`, `free_transfers`, and `chips_available` when known.
+
+Example:
+
+```json
+{
+  "enabled": true,
+  "bank_tenths": 5,
+  "free_transfers": 1,
+  "chips_available": ["wildcard", "freehit", "bboost", "3xc"],
+  "squad_player_ids": null,
+  "squad_player_names": [
+    "Player One",
+    "Player Two"
+  ]
+}
+```
+
+`bank_tenths` uses FPL's integer units: `5` means GBP0.5m. If a manual name is unknown or ambiguous, the report flags it rather than guessing.
