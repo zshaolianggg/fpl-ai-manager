@@ -1,0 +1,10 @@
+{
+  "team_id": 6000549,
+  "objective": "maximum overall rank",
+  "risk_profile": "balanced",
+  "timezone": "Asia/Singapore",
+  "preview_window_hours": [23.0, 25.0],
+  "final_window_hours": [2.0, 3.5],
+  "lookahead_gameweeks": 6,
+  "manual_state_file": "config/manual_state.json"
+}

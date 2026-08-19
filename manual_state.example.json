@@ -1,0 +1,8 @@
+{
+  "enabled": false,
+  "notes": "Optional override for changes the public FPL API cannot yet see before a deadline.",
+  "bank_tenths": null,
+  "free_transfers": null,
+  "chips_available": null,
+  "squad_player_ids": null
+}

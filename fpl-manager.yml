@@ -1,0 +1,74 @@
+name: FPL AI Manager
+
+on:
+  schedule:
+    # GitHub cron is UTC. Run hourly; Python checks the actual FPL deadline.
+    - cron: "17 * * * *"
+  workflow_dispatch:
+    inputs:
+      force_report:
+        description: "Optional: preview or final"
+        required: false
+        type: choice
+        options: ["", "preview", "final"]
+
+permissions:
+  contents: read
+
+env:
+  FPL_TEAM_ID: "6000549"
+  FPL_TIMEZONE: "Asia/Singapore"
+  OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-5' }}
+  OPENAI_WEB_SEARCH: "true"
+  FORCE_REPORT: ${{ inputs.force_report }}
+
+jobs:
+  recommend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e .
+
+      - name: Check whether a report is due
+        id: preflight
+        run: python -m fpl_ai_manager.preflight
+
+      - name: Restore sent marker
+        if: steps.preflight.outputs.due == 'true' && github.event_name == 'schedule'
+        id: sent-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .fpl-sent-marker
+          key: ${{ steps.preflight.outputs.cache_key }}
+
+      - name: Generate and email recommendation
+        if: >-
+          steps.preflight.outputs.due == 'true' &&
+          (github.event_name == 'workflow_dispatch' || steps.sent-cache.outputs.cache-hit != 'true')
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_USE_TLS: ${{ secrets.SMTP_USE_TLS }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+        run: |
+          python -m fpl_ai_manager.main
+          echo "sent" > .fpl-sent-marker
+
+      - name: Save sent marker
+        if: >-
+          success() && github.event_name == 'schedule' &&
+          steps.preflight.outputs.due == 'true' &&
+          steps.sent-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .fpl-sent-marker
+          key: ${{ steps.preflight.outputs.cache_key }}
