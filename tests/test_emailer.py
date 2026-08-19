@@ -32,3 +32,29 @@ Defenders:
     assert '<li>Raya — 5.5</li>' in rendered
     assert '<li>Haaland — 15.0</li>' in rendered
     assert '<li><strong>Goalkeepers</strong></li>' not in rendered
+
+
+def test_send_email_adds_prompt_attachment(monkeypatch):
+    import fpl_ai_manager.emailer as emailer
+
+    sent = {}
+
+    class DummySMTP:
+        def __init__(self, *args, **kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def starttls(self): pass
+        def login(self, username, password): pass
+        def send_message(self, msg): sent["msg"] = msg
+
+    monkeypatch.setenv("SMTP_HOST", "smtp.example.test")
+    monkeypatch.setenv("SMTP_PORT", "587")
+    monkeypatch.setenv("EMAIL_FROM", "from@example.test")
+    monkeypatch.setenv("EMAIL_TO", "to@example.test")
+    monkeypatch.setattr(emailer.smtplib, "SMTP", DummySMTP)
+
+    emailer.send_email("Subject", "# Report", attachment_text="instructions + input", attachment_filename="audit.txt")
+    attachments = list(sent["msg"].iter_attachments())
+    assert len(attachments) == 1
+    assert attachments[0].get_filename() == "audit.txt"
+    assert "instructions + input" in attachments[0].get_content()

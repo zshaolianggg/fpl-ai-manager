@@ -102,7 +102,7 @@ def _markdown_to_html(body: str) -> str:
 </html>"""
 
 
-def send_email(subject: str, body: str) -> None:
+def send_email(subject: str, body: str, attachment_text: str | None = None, attachment_filename: str = "openai-prompt.txt") -> None:
     host = os.environ["SMTP_HOST"]
     port = int(os.getenv("SMTP_PORT", "587"))
     username = os.getenv("SMTP_USERNAME")
@@ -119,6 +119,14 @@ def send_email(subject: str, body: str) -> None:
     # Plain text fallback + HTML rendering for modern email clients.
     msg.set_content(body)
     msg.add_alternative(_markdown_to_html(body), subtype="html")
+
+    if attachment_text is not None:
+        msg.add_attachment(
+            attachment_text.encode("utf-8"),
+            maintype="text",
+            subtype="plain",
+            filename=attachment_filename,
+        )
 
     with smtplib.SMTP(host, port, timeout=30) as smtp:
         if use_tls:

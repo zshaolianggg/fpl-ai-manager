@@ -10,6 +10,11 @@ It runs hourly in GitHub Actions but exits immediately unless a report is due:
 
 The report includes transfers/roll decision, XI, bench, captain/VC, chip advice, reasoning, risks, and a balanced alternative. The final OpenAI call can use web search for fresh injury and press-conference news.
 
+
+## OpenAI prompt audit attachment
+
+Every email that actually calls OpenAI includes a text attachment named like `fpl-gw1-openai-prompt.txt`. It records the model name, enabled OpenAI tools, the exact `instructions` string, and the exact `input` string sent by this application. API keys, SMTP credentials, and HTTP authorization headers are never included. Safety-withheld emails do not have this attachment because no OpenAI request is made.
+
 ## Important FPL data limitation
 
 The public FPL endpoints can expose the latest *public/locked* team, history, fixtures, prices and player data, but they may **not reveal private changes you make before the next deadline**. So if you make a transfer after a deadline, the automation may still see the previous public squad until the next lock.

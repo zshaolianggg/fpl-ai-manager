@@ -57,3 +57,18 @@ Under Transfers, explicitly say ROLL if no transfer is recommended. State any un
 
 def build_prompt(payload: dict[str, Any]) -> str:
     return "Analyze this structured FPL snapshot and produce the requested report.\n\n" + json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
+
+
+def request_audit_text(payload: dict[str, Any], model: str, use_web: bool) -> str:
+    """Return a human-readable record of the non-secret OpenAI request content."""
+    tools = '[{"type":"web_search"}]' if use_web else '[]'
+    return (
+        "FPL AI Manager - OpenAI request audit\n"
+        "=====================================\n\n"
+        f"model: {model}\n"
+        f"tools: {tools}\n\n"
+        "--- instructions ---\n"
+        f"{SYSTEM}\n\n"
+        "--- input ---\n"
+        f"{build_prompt(payload)}\n"
+    )

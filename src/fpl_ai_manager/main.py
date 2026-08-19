@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
 from .ai import recommend
+from .prompting import request_audit_text
 from .analyzer import build_fixture_map, classify_window, compact_entry, compact_player, shortlist_candidates
 from .emailer import send_email
 from .fpl import FPLClient, FPLAPIError, latest_public_event, next_event, parse_deadline
@@ -184,18 +185,21 @@ def main() -> int:
     state = snapshot.get("state_check", {})
     gw = snapshot["next_gameweek"]
     mode = snapshot.get("mode", "managed_squad")
+    prompt_attachment = None
     if mode == "gw1_initial_build":
+        prompt_attachment = request_audit_text(snapshot, os.getenv("OPENAI_MODEL", "gpt-5"), os.getenv("OPENAI_WEB_SEARCH", "true").lower() in {"1", "true", "yes"})
         text = recommend(snapshot)
         subject = f"FPL GW1 - {'Initial Squad Preview' if report_type == 'preview' else ('Sleep-safe Final Initial Squad' if snapshot.get('delivery_mode') == 'sleep_safe' else 'Final Initial Squad')}"
     elif not state.get("actionable", False):
         text = safety_warning_markdown(snapshot)
         subject = f"FPL GW{gw} - ACTION WITHHELD (state not verified)"
     else:
+        prompt_attachment = request_audit_text(snapshot, os.getenv("OPENAI_MODEL", "gpt-5"), os.getenv("OPENAI_WEB_SEARCH", "true").lower() in {"1", "true", "yes"})
         text = recommend(snapshot)
         subject = f"FPL GW{gw} - {'24h Preview' if report_type == 'preview' else ('Sleep-safe Final Recommendation' if snapshot.get('delivery_mode') == 'sleep_safe' else 'Final Recommendation')}"
     print(text)
     if os.getenv("DRY_RUN", "false").lower() not in {"1", "true", "yes"}:
-        send_email(subject, text)
+        send_email(subject, text, attachment_text=prompt_attachment, attachment_filename=f"fpl-gw{gw}-openai-prompt.txt")
     return 0
 
 
