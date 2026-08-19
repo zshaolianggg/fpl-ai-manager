@@ -26,13 +26,23 @@ def _markdown_to_fragment(body: str) -> str:
             out.append(f"</{list_type}>")
             list_type = None
 
+    position_labels = {"goalkeepers", "defenders", "midfielders", "forwards"}
+
     for raw in body.splitlines():
         line = raw.strip()
         if not line:
             close_list()
             continue
 
-        if line.startswith("### "):
+        # The model occasionally emits squad position labels as plain text, bold
+        # text, or even list items. Promote these labels to real subheadings so
+        # they cannot visually merge into the player list in HTML email clients.
+        label_probe = re.sub(r"^[-*]\s+", "", line)
+        label_probe = re.sub(r"^[*_]+|[*_]+$", "", label_probe).strip().rstrip(":")
+        if label_probe.lower() in position_labels:
+            close_list()
+            out.append(f'<h3 class="position-heading">{html.escape(label_probe.title())}</h3>')
+        elif line.startswith("### "):
             close_list()
             out.append(f"<h3>{_inline_markdown(line[4:])}</h3>")
         elif line.startswith("## "):
@@ -78,6 +88,7 @@ def _markdown_to_html(body: str) -> str:
         h1 {{ font-size:26px; margin:0 0 20px; line-height:1.25; }}
         h2 {{ font-size:20px; margin:28px 0 10px; line-height:1.3; border-bottom:1px solid #eceff1; padding-bottom:6px; }}
         h3 {{ font-size:17px; margin:22px 0 8px; }}
+        .position-heading {{ font-size:16px; margin:20px 0 8px; padding:8px 10px; background:#f6f8fa; border-radius:6px; }}
         p {{ margin:10px 0; }}
         ul, ol {{ margin:8px 0 14px 24px; padding:0; }}
         li {{ margin:5px 0; }}
