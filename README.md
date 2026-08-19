@@ -161,3 +161,13 @@ Before generating actionable transfer/lineup advice, the workflow verifies both:
 If either check fails, the model is **not called for FPL advice**. Instead, the workflow emails an `ACTION WITHHELD` diagnostic notice. This prevents a plausible-looking generic recommendation from being mistaken for team-specific instructions.
 
 Free-transfer and chip uncertainty is still surfaced explicitly and must not be guessed. Because public FPL state is locked at the previous deadline, this mode assumes you do not make private transfers before the recommendation you intend to follow.
+
+## Automatic GW1 initial build
+
+Before the first deadline, FPL does not expose a locked public 15-player squad. This repository therefore treats GW1 as a special initial-build mode when no manual squad is supplied.
+
+In `gw1_initial_build` mode the AI is instructed to produce a complete legal opening squad from the live FPL player pool sent by the analyzer. The recommendation must contain exactly 2 goalkeepers, 5 defenders, 5 midfielders and 3 forwards, use no more than 3 players from one club, cost no more than £100.0m, and show the total cost and remaining bank. It also selects the GW1 starting XI, bench order, captain and vice-captain with a GW1-GW6 horizon.
+
+You do not need `config/manual_state.json` for this workflow if you intend to build your GW1 team entirely from the emailed recommendation.
+
+From GW2 onward, the behavior changes automatically to `managed_squad`: the latest locked public squad is the canonical current team. Actionable transfer/lineup advice is withheld if the 15-player squad or bank cannot be verified.

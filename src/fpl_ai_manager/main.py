@@ -113,7 +113,20 @@ def collect_snapshot(cfg: dict, client: FPLClient) -> tuple[dict, str | None]:
         warnings=warnings,
     )
 
+    mode = "gw1_initial_build" if int(nxt["id"]) == 1 and not squad_ids else "managed_squad"
+
+    state_dict = state_check.to_dict()
+    if mode == "gw1_initial_build":
+        # Pre-GW1 is intentionally draft-from-scratch mode, so remove safety
+        # diagnostics that only apply to managed-squad transfer advice.
+        state_dict["notes"] = [
+            n for n in state_dict.get("notes", [])
+            if "Safety gate failed" not in n
+            and "use config/manual_state.json" not in n
+        ]
+
     payload = {
+        "mode": mode,
         "report_type": report_type,
         "generated_at": now.isoformat(),
         "team_id": team_id,
@@ -124,7 +137,7 @@ def collect_snapshot(cfg: dict, client: FPLClient) -> tuple[dict, str | None]:
         "deadline_local": parse_deadline(nxt["deadline_time"]).astimezone(local_tz).isoformat(),
         "hours_to_deadline": round(hours, 2),
         "entry_summary": compact_entry(entry),
-        "state_check": state_check.to_dict(),
+        "state_check": state_dict,
         "latest_public_gameweek": public_gw,
         "latest_history": latest_hist,
         "bank_tenths": bank,
@@ -161,7 +174,11 @@ def main() -> int:
 
     state = snapshot.get("state_check", {})
     gw = snapshot["next_gameweek"]
-    if not state.get("actionable", False):
+    mode = snapshot.get("mode", "managed_squad")
+    if mode == "gw1_initial_build":
+        text = recommend(snapshot)
+        subject = f"FPL GW1 - {'Initial Squad Preview' if report_type == 'preview' else 'Final Initial Squad'}"
+    elif not state.get("actionable", False):
         text = safety_warning_markdown(snapshot)
         subject = f"FPL GW{gw} - ACTION WITHHELD (state not verified)"
     else:
