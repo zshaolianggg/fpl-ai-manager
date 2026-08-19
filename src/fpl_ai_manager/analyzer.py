@@ -22,13 +22,75 @@ def compact_player(p: dict[str, Any], team_name: str) -> dict[str, Any]:
         "id", "web_name", "element_type", "now_cost", "total_points", "event_points",
         "form", "points_per_game", "selected_by_percent", "minutes", "starts",
         "expected_goals", "expected_assists", "expected_goal_involvements",
-        "expected_goals_conceded", "influence", "creativity", "threat", "ict_index",
-        "status", "chance_of_playing_next_round", "news", "news_added",
-        "transfers_in_event", "transfers_out_event",
+        "status", "chance_of_playing_next_round", "news",
     ]
     out = {k: p.get(k) for k in fields}
     out["team"] = team_name
     return out
+
+
+def candidate_player(p: dict[str, Any], team_name: str) -> dict[str, Any]:
+    """Smaller representation for transfer candidates.
+
+    Fixtures are intentionally not embedded here; they are supplied once in
+    team_fixtures to avoid repeating the same data for every player.
+    """
+    fields = [
+        "id", "web_name", "element_type", "now_cost", "total_points", "form",
+        "points_per_game", "selected_by_percent", "minutes", "starts",
+        "expected_goal_involvements", "status", "chance_of_playing_next_round", "news",
+    ]
+    out = {k: p.get(k) for k in fields}
+    out["team"] = team_name
+    return out
+
+
+def _num(value: Any) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def candidate_score(p: dict[str, Any]) -> float:
+    """Ranking heuristic used only to choose which candidates reach the LLM.
+
+    It is deliberately broad: season points/form/xGI matter once data exists,
+    while ownership helps keep relevant options in the pool at the start of a
+    new season when most performance fields are still zero.
+    """
+    availability = 0.0 if p.get("status") in {"i", "s", "u"} else 1.0
+    return (
+        2.0 * _num(p.get("form"))
+        + 1.2 * _num(p.get("points_per_game"))
+        + 0.03 * _num(p.get("total_points"))
+        + 1.5 * _num(p.get("expected_goal_involvements"))
+        + 0.08 * _num(p.get("selected_by_percent"))
+        + availability
+    )
+
+
+def shortlist_candidates(players: list[dict[str, Any]], teams: dict[int, str]) -> list[dict[str, Any]]:
+    # Enough breadth for sensible alternatives without sending the entire game
+    # database. FPL position ids: 1 GK, 2 DEF, 3 MID, 4 FWD.
+    limits = {1: 18, 2: 40, 3: 45, 4: 30}
+    result: list[dict[str, Any]] = []
+    for position, limit in limits.items():
+        group = [p for p in players if int(p.get("element_type", 0)) == position]
+        group.sort(key=candidate_score, reverse=True)
+        for p in group[:limit]:
+            result.append(candidate_player(p, teams[int(p["team"])]))
+    return result
+
+
+def compact_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    fields = [
+        "id", "name", "player_first_name", "player_last_name",
+        "summary_overall_points", "summary_overall_rank",
+        "summary_event_points", "summary_event_rank",
+        "last_deadline_bank", "last_deadline_value", "last_deadline_total_transfers",
+    ]
+    return {k: entry.get(k) for k in fields if k in entry}
 
 
 def build_fixture_map(fixtures: list[dict[str, Any]], teams: dict[int, str], next_event_id: int, lookahead: int) -> dict[str, list[dict[str, Any]]]:

@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
 from .ai import recommend
-from .analyzer import build_fixture_map, classify_window, compact_player
+from .analyzer import build_fixture_map, classify_window, compact_entry, compact_player, shortlist_candidates
 from .emailer import send_email
 from .fpl import FPLClient, FPLAPIError, latest_public_event, next_event, parse_deadline
 
@@ -80,12 +80,7 @@ def collect_snapshot(cfg: dict, client: FPLClient) -> tuple[dict, str | None]:
     bank = manual.get("bank_tenths") if manual.get("bank_tenths") is not None else latest_hist.get("bank")
     value = latest_hist.get("value")
 
-    all_players = []
-    for p in bootstrap["elements"]:
-        team_name = teams[int(p["team"])]
-        cp = compact_player(p, team_name)
-        cp["fixtures"] = fixture_map.get(team_name, [])
-        all_players.append(cp)
+    candidate_pool = shortlist_candidates(bootstrap["elements"], teams)
 
     local_tz = ZoneInfo(cfg.get("timezone", "Asia/Singapore"))
     payload = {
@@ -98,7 +93,7 @@ def collect_snapshot(cfg: dict, client: FPLClient) -> tuple[dict, str | None]:
         "deadline_utc": nxt["deadline_time"],
         "deadline_local": parse_deadline(nxt["deadline_time"]).astimezone(local_tz).isoformat(),
         "hours_to_deadline": round(hours, 2),
-        "entry_summary": entry,
+        "entry_summary": compact_entry(entry),
         "latest_public_gameweek": public_gw,
         "latest_history": latest_hist,
         "bank_tenths": bank,
@@ -107,7 +102,8 @@ def collect_snapshot(cfg: dict, client: FPLClient) -> tuple[dict, str | None]:
         "chips_available_override": manual.get("chips_available"),
         "chip_history": history.get("chips", []),
         "current_public_squad": squad,
-        "candidate_pool": all_players,
+        "team_fixtures": fixture_map,
+        "candidate_pool": candidate_pool,
         "data_warnings": warnings + [
             "Public FPL endpoints may not expose transfers/captain changes made after the last deadline. Recommendations are based on the latest public squad unless manual_state.json overrides it.",
             "Free-transfer count and exact currently available chips may not be inferable from public data; do not guess when absent."

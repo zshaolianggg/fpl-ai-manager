@@ -20,4 +20,4 @@ Under Transfers, explicitly say ROLL if no transfer is recommended. State any un
 
 
 def build_prompt(payload: dict[str, Any]) -> str:
-    return "Analyze this structured FPL snapshot and produce the requested report.\n\n" + json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+    return "Analyze this structured FPL snapshot and produce the requested report.\n\n" + json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
