@@ -27,11 +27,18 @@ def main() -> int:
     if not nxt:
         emit("due", "false")
         return 0
-    kind, _ = classify_window(
-        nxt["deadline_time"], tuple(cfg["preview_window_hours"]), tuple(cfg["final_window_hours"])
+    kind, _, delivery_mode = classify_window(
+        nxt["deadline_time"],
+        tuple(cfg["preview_window_hours"]),
+        tuple(cfg["final_window_hours"]),
+        timezone_name=cfg.get("timezone", "Asia/Shanghai"),
+        sleep_cutoff_hour=int(cfg.get("sleep_cutoff_hour", 23)),
+        wake_hour=int(cfg.get("wake_hour", 7)),
+        sleep_safe_send_hour=int(cfg.get("sleep_safe_send_hour", 22)),
     )
     if force in {"preview", "final"}:
         kind = force
+        delivery_mode = "forced"
     if not kind:
         emit("due", "false")
         return 0
@@ -39,6 +46,7 @@ def main() -> int:
     emit("due", "true")
     emit("report_type", kind)
     emit("gw", gw)
+    emit("delivery_mode", delivery_mode or "standard")
     emit("cache_key", f"fpl-report-{gw}-{kind}")
     return 0
 

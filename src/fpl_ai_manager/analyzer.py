@@ -1,20 +1,74 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, time, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from .fpl import parse_deadline
 
 
-def classify_window(deadline_iso: str, preview: tuple[float, float], final: tuple[float, float], now: datetime | None = None) -> tuple[str | None, float]:
+def _hour_in_quiet_period(local_dt: datetime, cutoff_hour: int, wake_hour: int) -> bool:
+    hour = local_dt.hour + local_dt.minute / 60
+    return hour >= cutoff_hour or hour < wake_hour
+
+
+def classify_window(
+    deadline_iso: str,
+    preview: tuple[float, float],
+    final: tuple[float, float],
+    now: datetime | None = None,
+    *,
+    timezone_name: str = "Asia/Shanghai",
+    sleep_cutoff_hour: int = 23,
+    wake_hour: int = 7,
+    sleep_safe_send_hour: int = 22,
+) -> tuple[str | None, float, str | None]:
+    """Classify whether a preview/final report is due.
+
+    Final reports normally use the configured hours-before-deadline window. If
+    the midpoint of that window would land in the user's quiet period
+    (23:00-07:00 by default), the final is moved to the previous safe evening.
+
+    The sleep-safe target intentionally defaults to 22:00 rather than exactly
+    23:00 to leave margin for GitHub Actions scheduling delays. A hard cutoff
+    prevents a scheduled final from being emitted at or after 23:00 local time.
+
+    Returns: (report_type, hours_to_deadline, delivery_mode)
+      report_type: preview | final | None
+      delivery_mode: standard | sleep_safe | None
+    """
     now = now or datetime.now(timezone.utc)
     deadline = parse_deadline(deadline_iso)
     hours = (deadline - now).total_seconds() / 3600
-    if final[0] <= hours <= final[1]:
-        return "final", hours
+    tz = ZoneInfo(timezone_name)
+    local_now = now.astimezone(tz)
+    local_deadline = deadline.astimezone(tz)
+
+    final_midpoint = (final[0] + final[1]) / 2
+    ideal_final_local = local_deadline - timedelta(hours=final_midpoint)
+    sleep_safe_required = _hour_in_quiet_period(ideal_final_local, sleep_cutoff_hour, wake_hour)
+
+    if sleep_safe_required:
+        target_date = ideal_final_local.date()
+        if ideal_final_local.hour < wake_hour:
+            target_date -= timedelta(days=1)
+        target_local = datetime.combine(target_date, time(sleep_safe_send_hour, 0), tzinfo=tz)
+        cutoff_local = datetime.combine(target_date, time(sleep_cutoff_hour, 0), tzinfo=tz)
+
+        # Hourly GitHub cron runs at :17. Accept a broad 90-minute window around
+        # the 22:00 target; deduplication guarantees only one final per GW.
+        earliest = target_local - timedelta(minutes=30)
+        if earliest <= local_now < cutoff_local:
+            return "final", hours, "sleep_safe"
+    else:
+        if final[0] <= hours <= final[1]:
+            # Even standard finals must respect the local hard cutoff.
+            if not _hour_in_quiet_period(local_now, sleep_cutoff_hour, wake_hour):
+                return "final", hours, "standard"
+
     if preview[0] <= hours <= preview[1]:
-        return "preview", hours
-    return None, hours
+        return "preview", hours, "standard"
+    return None, hours, None
 
 
 def compact_player(p: dict[str, Any], team_name: str) -> dict[str, Any]:

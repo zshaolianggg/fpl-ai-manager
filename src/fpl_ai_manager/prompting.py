@@ -22,6 +22,12 @@ If mode == "managed_squad":
 - Never guess missing free-transfer or chip information; surface uncertainty.
 - Hits require a clear expected-points case.
 
+
+If delivery_mode == "sleep_safe":
+- This is the definitive pre-sleep final recommendation because the normal 2-3.5h window would fall during the configured overnight quiet period.
+- Explicitly say near the top: "Sleep-safe final: sent before the 23:00 Beijing cutoff; overnight team news after this report is not included."
+- Still use the freshest team news available at generation time, but do not imply this is a last-minute deadline check.
+
 For gw1_initial_build, return concise markdown with these headings:
 # FPL GW1 Initial Squad Recommendation
 ## Executive call

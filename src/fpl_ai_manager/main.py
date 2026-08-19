@@ -33,11 +33,19 @@ def collect_snapshot(cfg: dict, client: FPLClient) -> tuple[dict, str | None]:
         raise RuntimeError("No future FPL event/deadline found.")
 
     force = os.getenv("FORCE_REPORT", "").strip().lower() or None
-    report_type, hours = classify_window(
-        nxt["deadline_time"], tuple(cfg["preview_window_hours"]), tuple(cfg["final_window_hours"]), now
+    report_type, hours, delivery_mode = classify_window(
+        nxt["deadline_time"],
+        tuple(cfg["preview_window_hours"]),
+        tuple(cfg["final_window_hours"]),
+        now,
+        timezone_name=cfg.get("timezone", "Asia/Shanghai"),
+        sleep_cutoff_hour=int(cfg.get("sleep_cutoff_hour", 23)),
+        wake_hour=int(cfg.get("wake_hour", 7)),
+        sleep_safe_send_hour=int(cfg.get("sleep_safe_send_hour", 22)),
     )
     if force in {"preview", "final"}:
         report_type = force
+        delivery_mode = "forced"
     if not report_type:
         return {"next_event": nxt, "hours_to_deadline": hours}, None
 
@@ -128,6 +136,7 @@ def collect_snapshot(cfg: dict, client: FPLClient) -> tuple[dict, str | None]:
     payload = {
         "mode": mode,
         "report_type": report_type,
+        "delivery_mode": delivery_mode,
         "generated_at": now.isoformat(),
         "team_id": team_id,
         "objective": cfg["objective"],
@@ -177,13 +186,13 @@ def main() -> int:
     mode = snapshot.get("mode", "managed_squad")
     if mode == "gw1_initial_build":
         text = recommend(snapshot)
-        subject = f"FPL GW1 - {'Initial Squad Preview' if report_type == 'preview' else 'Final Initial Squad'}"
+        subject = f"FPL GW1 - {'Initial Squad Preview' if report_type == 'preview' else ('Sleep-safe Final Initial Squad' if snapshot.get('delivery_mode') == 'sleep_safe' else 'Final Initial Squad')}"
     elif not state.get("actionable", False):
         text = safety_warning_markdown(snapshot)
         subject = f"FPL GW{gw} - ACTION WITHHELD (state not verified)"
     else:
         text = recommend(snapshot)
-        subject = f"FPL GW{gw} - {'24h Preview' if report_type == 'preview' else 'Final Recommendation'}"
+        subject = f"FPL GW{gw} - {'24h Preview' if report_type == 'preview' else ('Sleep-safe Final Recommendation' if snapshot.get('delivery_mode') == 'sleep_safe' else 'Final Recommendation')}"
     print(text)
     if os.getenv("DRY_RUN", "false").lower() not in {"1", "true", "yes"}:
         send_email(subject, text)

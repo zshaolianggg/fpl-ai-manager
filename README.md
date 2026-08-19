@@ -2,10 +2,11 @@
 
 A small scheduled FPL co-manager configured for **team 6000549**, **maximum overall rank**, and a **balanced** risk profile.
 
-It runs hourly in GitHub Actions but exits immediately unless the next official FPL deadline is either:
+It runs hourly in GitHub Actions but exits immediately unless a report is due:
 
-- **23-25 hours away** -> sends the 24h preview
-- **2-3.5 hours away** -> sends the final recommendation
+- **23-25 hours before deadline** -> sends the 24h preview
+- **2-3.5 hours before deadline** -> sends the normal final recommendation when that falls in waking hours
+- If the normal final would land between **23:00 and 07:00 Beijing time**, it instead sends a **Sleep-safe final** at about **22:00 Beijing time on the preceding evening**, with a hard 23:00 cutoff.
 
 The report includes transfers/roll decision, XI, bench, captain/VC, chip advice, reasoning, risks, and a balanced alternative. The final OpenAI call can use web search for fresh injury and press-conference news.
 
@@ -95,6 +96,9 @@ Edit `config/manager.json` to change:
 - risk profile
 - timezone
 - deadline windows
+- `sleep_cutoff_hour` (default 23)
+- `wake_hour` (default 7)
+- `sleep_safe_send_hour` (default 22; intentionally one hour before the cutoff to allow for GitHub scheduler delay)
 - fixture lookahead
 
 ## Cost/control
@@ -114,6 +118,8 @@ The workflow checks FPL hourly, but **does not call OpenAI outside the deadline 
 FPL's public JSON endpoints are operationally useful but should be treated as unofficial/unsupported. The client is intentionally isolated in `src/fpl_ai_manager/fpl.py` so endpoint changes are easy to repair.
 
 GitHub scheduled workflows can occasionally run late. The windows are intentionally broad enough to tolerate modest scheduler delay, and a GitHub Actions cache marker prevents duplicate scheduled emails for the same Gameweek/report type. Manual workflow-dispatch tests intentionally bypass this deduplication.
+
+For sleep-safe finals, the configured hard cutoff is 23:00 Beijing time (`Asia/Shanghai`). The workflow targets about 22:00 rather than exactly 23:00 to leave scheduler-delay margin. A run that starts at or after 23:00 will not send a scheduled final. This design minimizes the risk of a late-night email, though GitHub Actions itself cannot provide a contractual exact-start-time guarantee.
 
 ## Squad-state verification and pre-GW1 drafts
 
