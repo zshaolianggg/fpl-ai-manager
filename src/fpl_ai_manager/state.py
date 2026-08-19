@@ -14,6 +14,7 @@ class StateCheck:
     free_transfers_status: str
     chips_status: str
     latest_public_gameweek: int | None
+    actionable: bool
     notes: list[str]
 
     def to_dict(self) -> dict[str, Any]:
@@ -84,21 +85,65 @@ def build_state_check(
     warnings: list[str],
 ) -> StateCheck:
     squad_ok = len(squad_ids) == 15 and len(set(squad_ids)) == 15
+    bank_ok = bank is not None
     notes = list(warnings)
+
     if latest_public_gameweek is None and squad_source == "none":
         notes.append(
             "Before the first season deadline there is no locked public picks endpoint; "
             "use config/manual_state.json to provide the draft if you want team-specific advice."
         )
 
+    # Safety gate: actionable transfer/lineup advice requires both a verified
+    # 15-player squad and a verified bank figure. FT/chip uncertainty is surfaced
+    # separately and must never be guessed by the model.
+    actionable = squad_ok and bank_ok
+    if not actionable:
+        notes.append(
+            "Safety gate failed: actionable transfer instructions are disabled until both "
+            "the 15-player squad and bank are verified."
+        )
+
     return StateCheck(
         squad_status="verified" if squad_ok else ("partial" if squad_ids else "unavailable"),
         squad_count=len(squad_ids),
         squad_source=squad_source,
-        bank_status="verified" if bank is not None else "unavailable",
+        bank_status="verified" if bank_ok else "unavailable",
         bank_source=bank_source,
         free_transfers_status="manual" if free_transfers is not None else "unavailable",
         chips_status="manual" if chips_override is not None else ("history_only" if chip_history else "unavailable"),
         latest_public_gameweek=latest_public_gameweek,
+        actionable=actionable,
         notes=notes,
     )
+
+
+def safety_warning_markdown(snapshot: dict[str, Any]) -> str:
+    """Deterministic warning email used when state verification fails.
+
+    This intentionally bypasses the LLM so an unverified state can never result
+    in plausible-looking but unsafe transfer instructions.
+    """
+    state = snapshot.get("state_check", {})
+    gw = snapshot.get("next_gameweek", "?")
+    report = "Preview" if snapshot.get("report_type") == "preview" else "Final"
+    lines = [
+        f"# FPL GW{gw} {report} - Action Withheld",
+        "",
+        "## Safety check failed",
+        "I did **not** generate transfer, captaincy, chip, or starting-XI instructions because the current team state could not be verified safely.",
+        "",
+        f"- Squad: **{state.get('squad_status', 'unknown')}** ({state.get('squad_count', 0)}/15), source: `{state.get('squad_source', 'unknown')}`",
+        f"- Bank: **{state.get('bank_status', 'unknown')}**, source: `{state.get('bank_source', 'unknown')}`",
+        f"- Latest public locked GW: **{state.get('latest_public_gameweek')}**",
+        "",
+        "## What to do",
+    ]
+    if state.get("latest_public_gameweek") is None:
+        lines.append("For GW1 before the first deadline, provide `config/manual_state.json` with your 15-player draft and bank. After GW1 locks, the public locked squad becomes the normal canonical source.")
+    else:
+        lines.append("Check the FPL endpoint/data availability and rerun the workflow. Do not make FPL changes based on a generic fallback recommendation.")
+    notes = state.get("notes") or []
+    if notes:
+        lines += ["", "## Diagnostics"] + [f"- {n}" for n in notes]
+    return "\n".join(lines)

@@ -146,3 +146,18 @@ Example:
 ```
 
 `bank_tenths` uses FPL's integer units: `5` means GBP0.5m. If a manual name is unknown or ambiguous, the report flags it rather than guessing.
+
+## Safety-first operating mode
+
+This repository is designed for a workflow where you wait for the automated recommendation before making FPL changes.
+
+After GW1 locks, the latest public locked squad is the canonical squad source. `config/manual_state.json` is disabled by default and should normally remain disabled. The manual override is primarily for the pre-GW1 draft or exceptional recovery situations.
+
+Before generating actionable transfer/lineup advice, the workflow verifies both:
+
+- exactly 15 unique squad players; and
+- a known bank balance.
+
+If either check fails, the model is **not called for FPL advice**. Instead, the workflow emails an `ACTION WITHHELD` diagnostic notice. This prevents a plausible-looking generic recommendation from being mistaken for team-specific instructions.
+
+Free-transfer and chip uncertainty is still surfaced explicitly and must not be guessed. Because public FPL state is locked at the previous deadline, this mode assumes you do not make private transfers before the recommendation you intend to follow.

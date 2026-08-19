@@ -13,7 +13,7 @@ from .ai import recommend
 from .analyzer import build_fixture_map, classify_window, compact_entry, compact_player, shortlist_candidates
 from .emailer import send_email
 from .fpl import FPLClient, FPLAPIError, latest_public_event, next_event, parse_deadline
-from .state import build_state_check, resolve_manual_squad_ids, validate_squad
+from .state import build_state_check, resolve_manual_squad_ids, safety_warning_markdown, validate_squad
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -159,9 +159,14 @@ def main() -> int:
         print(json.dumps(snapshot, indent=2, default=str))
         return 0
 
-    text = recommend(snapshot)
+    state = snapshot.get("state_check", {})
     gw = snapshot["next_gameweek"]
-    subject = f"FPL GW{gw} - {'24h Preview' if report_type == 'preview' else 'Final Recommendation'}"
+    if not state.get("actionable", False):
+        text = safety_warning_markdown(snapshot)
+        subject = f"FPL GW{gw} - ACTION WITHHELD (state not verified)"
+    else:
+        text = recommend(snapshot)
+        subject = f"FPL GW{gw} - {'24h Preview' if report_type == 'preview' else 'Final Recommendation'}"
     print(text)
     if os.getenv("DRY_RUN", "false").lower() not in {"1", "true", "yes"}:
         send_email(subject, text)
