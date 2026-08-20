@@ -1,136 +1,51 @@
-from __future__ import annotations
 
-import html
-import os
-import re
-import smtplib
+from __future__ import annotations
+import html, os, re, smtplib
 from email.message import EmailMessage
 
+def _inline(t):
+    t=html.escape(str(t))
+    t=re.sub(r"\*\*(.+?)\*\*",r"<strong>\1</strong>",t)
+    t=re.sub(r"`(.+?)`",r"<code>\1</code>",t)
+    return t
 
-def _inline_markdown(text: str) -> str:
-    text = html.escape(text, quote=True)
-    text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
-    text = re.sub(r"`([^`]+)`", r"<code>\1</code>", text)
-    text = re.sub(r"\*([^*]+)\*", r"<em>\1</em>", text)
-    return text
-
-
-def _markdown_to_fragment(body: str) -> str:
-    """Render the Markdown subset used by FPL reports to safe HTML."""
-    out: list[str] = []
-    list_type: str | None = None
-
-    def close_list() -> None:
-        nonlocal list_type
-        if list_type:
-            out.append(f"</{list_type}>")
-            list_type = None
-
-    position_labels = {"goalkeepers", "defenders", "midfielders", "forwards"}
-
+def _md(body):
+    out=[]; mode=None
+    def close():
+        nonlocal mode
+        if mode: out.append(f"</{mode}>"); mode=None
     for raw in body.splitlines():
-        line = raw.strip()
-        if not line:
-            close_list()
-            continue
-
-        # The model occasionally emits squad position labels as plain text, bold
-        # text, or even list items. Promote these labels to real subheadings so
-        # they cannot visually merge into the player list in HTML email clients.
-        label_probe = re.sub(r"^[-*]\s+", "", line)
-        label_probe = re.sub(r"^[*_]+|[*_]+$", "", label_probe).strip().rstrip(":")
-        if label_probe.lower() in position_labels:
-            close_list()
-            out.append(f'<h3 class="position-heading">{html.escape(label_probe.title())}</h3>')
-        elif line.startswith("### "):
-            close_list()
-            out.append(f"<h3>{_inline_markdown(line[4:])}</h3>")
-        elif line.startswith("## "):
-            close_list()
-            out.append(f"<h2>{_inline_markdown(line[3:])}</h2>")
-        elif line.startswith("# "):
-            close_list()
-            out.append(f"<h1>{_inline_markdown(line[2:])}</h1>")
-        elif re.match(r"^[-*]\s+", line):
-            if list_type != "ul":
-                close_list()
-                out.append("<ul>")
-                list_type = "ul"
-            item = re.sub(r"^[-*]\s+", "", line)
-            out.append(f"<li>{_inline_markdown(item)}</li>")
-        elif re.match(r"^\d+[.)]\s+", line):
-            if list_type != "ol":
-                close_list()
-                out.append("<ol>")
-                list_type = "ol"
-            item = re.sub(r"^\d+[.)]\s+", "", line)
-            out.append(f"<li>{_inline_markdown(item)}</li>")
-        else:
-            close_list()
-            out.append(f"<p>{_inline_markdown(line)}</p>")
-
-    close_list()
+        s=raw.strip()
+        if not s: close(); continue
+        if s.startswith("# "): close(); out.append(f"<h1>{_inline(s[2:])}</h1>")
+        elif s.startswith("## "): close(); out.append(f"<h2>{_inline(s[3:])}</h2>")
+        elif s.startswith("### "): close(); out.append(f"<h3>{_inline(s[4:])}</h3>")
+        elif re.match(r"^[-*]\s+",s):
+            if mode!="ul": close(); out.append("<ul>"); mode="ul"
+            out.append(f"<li>{_inline(re.sub(r'^[-*]\s+','',s))}</li>")
+        elif re.match(r"^\d+[.)]\s+",s):
+            if mode!="ol": close(); out.append("<ol>"); mode="ol"
+            out.append(f"<li>{_inline(re.sub(r'^\d+[.)]\s+','',s))}</li>")
+        else: close(); out.append(f"<p>{_inline(s)}</p>")
+    close()
     return "\n".join(out)
 
+def html_body(body):
+    return f"""<!doctype html><html><body style="background:#f4f6f8;font-family:Arial,sans-serif;color:#17202a;line-height:1.55">
+<div style="max-width:800px;margin:auto;background:white;padding:28px;border-radius:12px">
+<style>h1{{font-size:26px}}h2{{font-size:20px;border-bottom:1px solid #eee;padding-bottom:6px;margin-top:26px}}
+h3{{font-size:16px;background:#f6f8fa;padding:8px 10px;border-radius:6px;margin-top:18px}}
+li{{margin:5px 0}}code{{background:#f2f4f5;padding:2px 5px;border-radius:4px}}</style>{_md(body)}</div></body></html>"""
 
-def _markdown_to_html(body: str) -> str:
-    rendered = _markdown_to_fragment(body)
-    return f"""<!doctype html>
-<html>
-<head>
-  <meta charset=\"utf-8\">
-  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
-</head>
-<body style=\"margin:0;padding:0;background:#f4f6f8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;color:#17202a;line-height:1.55;\">
-  <div style=\"max-width:760px;margin:0 auto;padding:24px 16px;\">
-    <div style=\"background:#ffffff;border:1px solid #e6e9ed;border-radius:12px;padding:28px;\">
-      <style>
-        h1 {{ font-size:26px; margin:0 0 20px; line-height:1.25; }}
-        h2 {{ font-size:20px; margin:28px 0 10px; line-height:1.3; border-bottom:1px solid #eceff1; padding-bottom:6px; }}
-        h3 {{ font-size:17px; margin:22px 0 8px; }}
-        .position-heading {{ font-size:16px; margin:20px 0 8px; padding:8px 10px; background:#f6f8fa; border-radius:6px; }}
-        p {{ margin:10px 0; }}
-        ul, ol {{ margin:8px 0 14px 24px; padding:0; }}
-        li {{ margin:5px 0; }}
-        code {{ background:#f2f4f5; padding:2px 5px; border-radius:4px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }}
-      </style>
-      {rendered}
-    </div>
-    <div style=\"font-size:12px;color:#687078;text-align:center;padding:14px 8px 0;\">Generated by FPL AI Manager</div>
-  </div>
-</body>
-</html>"""
-
-
-def send_email(subject: str, body: str, attachment_text: str | None = None, attachment_filename: str = "openai-prompt.txt") -> None:
-    host = os.environ["SMTP_HOST"]
-    port = int(os.getenv("SMTP_PORT", "587"))
-    username = os.getenv("SMTP_USERNAME")
-    password = os.getenv("SMTP_PASSWORD")
-    sender = os.environ["EMAIL_FROM"]
-    recipient = os.environ["EMAIL_TO"]
-    use_tls = os.getenv("SMTP_USE_TLS", "true").lower() in {"1", "true", "yes"}
-
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = sender
-    msg["To"] = recipient
-
-    # Plain text fallback + HTML rendering for modern email clients.
-    msg.set_content(body)
-    msg.add_alternative(_markdown_to_html(body), subtype="html")
-
-    if attachment_text is not None:
-        msg.add_attachment(
-            attachment_text.encode("utf-8"),
-            maintype="text",
-            subtype="plain",
-            filename=attachment_filename,
-        )
-
-    with smtplib.SMTP(host, port, timeout=30) as smtp:
-        if use_tls:
-            smtp.starttls()
-        if username:
-            smtp.login(username, password or "")
-        smtp.send_message(msg)
+def send_email(subject,body,attachments=None):
+    msg=EmailMessage(); msg["Subject"]=subject; msg["From"]=os.environ["EMAIL_FROM"]; msg["To"]=os.environ["EMAIL_TO"]
+    msg.set_content(body); msg.add_alternative(html_body(body),subtype="html")
+    for filename,content,mimetype in attachments or []:
+        maintype,subtype=mimetype.split("/",1)
+        payload=content.encode() if isinstance(content,str) else content
+        msg.add_attachment(payload,maintype=maintype,subtype=subtype,filename=filename)
+    host=os.environ["SMTP_HOST"]; port=int(os.getenv("SMTP_PORT","587"))
+    with smtplib.SMTP(host,port,timeout=30) as s:
+        if os.getenv("SMTP_USE_TLS","true").lower() in {"1","true","yes"}: s.starttls()
+        if os.getenv("SMTP_USERNAME"): s.login(os.environ["SMTP_USERNAME"],os.getenv("SMTP_PASSWORD",""))
+        s.send_message(msg)

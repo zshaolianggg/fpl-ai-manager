@@ -1,8 +1,8 @@
+
 name: FPL AI Manager
 
 on:
   schedule:
-    # GitHub cron is UTC. Run hourly; Python checks the actual FPL deadline.
     - cron: "17 * * * *"
   workflow_dispatch:
     inputs:
@@ -19,13 +19,12 @@ env:
   FPL_TEAM_ID: "6000549"
   FPL_TIMEZONE: "Asia/Shanghai"
   OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-5' }}
-  OPENAI_WEB_SEARCH: "true"
   FORCE_REPORT: ${{ inputs.force_report }}
 
 jobs:
   recommend:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -34,22 +33,22 @@ jobs:
           cache: pip
       - run: pip install -e .
 
+      - name: Restore persistent manager state
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            .state
+            .cache
+          key: fpl-manager-state-${{ github.run_id }}
+          restore-keys: |
+            fpl-manager-state-
+
       - name: Check whether a report is due
         id: preflight
         run: python -m fpl_ai_manager.preflight
 
-      - name: Restore sent marker
-        if: steps.preflight.outputs.due == 'true' && github.event_name == 'schedule'
-        id: sent-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: .fpl-sent-marker
-          key: ${{ steps.preflight.outputs.cache_key }}
-
       - name: Generate and email recommendation
-        if: >-
-          steps.preflight.outputs.due == 'true' &&
-          (github.event_name == 'workflow_dispatch' || steps.sent-cache.outputs.cache-hit != 'true')
+        if: steps.preflight.outputs.due == 'true'
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
@@ -59,16 +58,15 @@ jobs:
           SMTP_USE_TLS: ${{ secrets.SMTP_USE_TLS }}
           EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
-        run: |
-          python -m fpl_ai_manager.main
-          echo "sent" > .fpl-sent-marker
+          REPORT_TYPE: ${{ steps.preflight.outputs.report_type }}
+          DELIVERY_MODE: ${{ steps.preflight.outputs.delivery_mode }}
+        run: python -m fpl_ai_manager.main
 
-      - name: Save sent marker
-        if: >-
-          success() && github.event_name == 'schedule' &&
-          steps.preflight.outputs.due == 'true' &&
-          steps.sent-cache.outputs.cache-hit != 'true'
+      - name: Save persistent manager state
+        if: always() && steps.preflight.outputs.due == 'true'
         uses: actions/cache/save@v4
         with:
-          path: .fpl-sent-marker
-          key: ${{ steps.preflight.outputs.cache_key }}
+          path: |
+            .state
+            .cache
+          key: fpl-manager-state-${{ github.run_id }}

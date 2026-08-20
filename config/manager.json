@@ -3,11 +3,101 @@
   "objective": "maximum overall rank",
   "risk_profile": "balanced",
   "timezone": "Asia/Shanghai",
-  "preview_window_hours": [23.0, 25.0],
-  "final_window_hours": [2.0, 3.5],
+  "preview_window_hours": [
+    23.0,
+    25.0
+  ],
+  "final_window_hours": [
+    2.0,
+    3.5
+  ],
   "sleep_cutoff_hour": 23,
   "wake_hour": 7,
   "sleep_safe_send_hour": 22,
-  "lookahead_gameweeks": 6,
-  "manual_state_file": "config/manual_state.json"
+  "projection_horizon_gws": 8,
+  "visible_projection_horizons": [
+    1,
+    3,
+    6
+  ],
+  "projection_weights": {
+    "gw1": 0.45,
+    "gw3": 0.35,
+    "gw6": 0.2
+  },
+  "bench_weight": 0.2,
+  "flexibility_cap_points": 2.0,
+  "ai_override_margin_points": 1.5,
+  "alternative_margin_points": 2.0,
+  "hit_rules": {
+    "minus4_min_gross_gain": 5.5,
+    "minus8_min_gross_gain": 11.0
+  },
+  "optimizer": {
+    "top_plans": 20,
+    "beam_width": 120,
+    "candidate_per_position": 22,
+    "max_transfers_considered": 4
+  },
+  "elite": {
+    "enabled": true,
+    "overall_league_id": 314,
+    "historical_core_size": 100,
+    "current_cohort_size": 75,
+    "candidate_pages": 16,
+    "min_past_seasons": 3,
+    "max_historical_median_rank": 300000,
+    "current_quality_floor_median_rank": 500000,
+    "refresh_every_gws": 4
+  },
+  "news": {
+    "enabled": true,
+    "max_players": 45,
+    "allowed_domains": [
+      "premierleague.com",
+      "arsenal.com",
+      "avfc.co.uk",
+      "afcb.co.uk",
+      "brentfordfc.com",
+      "brightonandhovealbion.com",
+      "chelseafc.com",
+      "cpfc.co.uk",
+      "evertonfc.com",
+      "fulhamfc.com",
+      "leedsunited.com",
+      "liverpoolfc.com",
+      "mancity.com",
+      "manutd.com",
+      "newcastleunited.com",
+      "nottinghamforest.co.uk",
+      "safc.com",
+      "tottenhamhotspur.com",
+      "whufc.com",
+      "wolves.co.uk",
+      "bbc.com",
+      "reuters.com",
+      "skysports.com",
+      "theguardian.com",
+      "espn.com",
+      "fantasyfootballscout.co.uk",
+      "allaboutfpl.com"
+    ]
+  },
+  "stats": {
+    "understat_enabled": true,
+    "cache_hours": 8
+  },
+  "chips": {
+    "scan_to_half_end": true,
+    "free_hit_early_threshold": 18.0,
+    "free_hit_late_threshold": 12.0,
+    "wildcard_early_threshold": 25.0,
+    "wildcard_late_threshold": 20.0,
+    "bench_boost_early_threshold": 16.0,
+    "bench_boost_late_threshold": 12.0,
+    "triple_captain_normal_points_target": 10.0
+  },
+  "state_file": ".state/manager_state.json",
+  "elite_cache_file": ".state/elite_cohort.json",
+  "stats_cache_dir": ".cache"
 }

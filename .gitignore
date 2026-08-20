@@ -3,4 +3,6 @@
 __pycache__/
 .pytest_cache/
 *.pyc
-state/runtime.json
+.state/
+.cache/
+config/manual_state.json

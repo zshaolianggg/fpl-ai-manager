@@ -1,12 +1,20 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "fpl-ai-manager"
-version = "0.1.0"
-requires-python = ">=3.11"
-dependencies = ["openai>=1.40.0", "requests>=2.32.0", "python-dotenv>=1.0.1"]
+version = "2.0.0"
+description = "Safety-first evidence-driven Fantasy Premier League recommendation engine"
+requires-python = ">=3.12"
+dependencies = [
+  "openai>=1.99.0",
+  "requests>=2.32.0",
+  "pulp>=3.2.0",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
