@@ -111,3 +111,10 @@ A manual `workflow_dispatch` run with `preview` or `final` is treated as **force
 It sends the email but does **not** mark the production preview/final as already sent, so testing cannot suppress the later scheduled report.
 
 The persistent `.state` / `.cache` GitHub cache is only saved on due report runs, not on every hourly wake-up.
+
+
+## Runtime safeguards
+
+GW1 skips elite-manager cohort discovery and per-player current-season history calls because there are no locked elite picks or current-season player histories to use before the first deadline.
+
+From GW2 onward, player-history enrichment is capped to a compact candidate set, elite discovery uses a bounded candidate pool and cached cohorts, and optional evidence should degrade gracefully rather than blocking the recommendation.

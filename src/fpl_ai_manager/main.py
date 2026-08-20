@@ -30,7 +30,7 @@ def summaries_for_candidates(client,players,state):
     for p in players:
         score=float(p.get("ep_next") or 0)*3+float(p.get("selected_by_percent") or 0)*.05+float(p.get("total_points") or 0)*.02+(1000 if int(p["id"]) in owned else 0)
         scored.append((score,int(p["id"])))
-    ids=[pid for _,pid in sorted(scored,reverse=True)[:110]]
+    ids=[pid for _,pid in sorted(scored,reverse=True)[:55]]
     out={}
     with ThreadPoolExecutor(max_workers=12) as ex:
         fut={ex.submit(lambda x: FPLClient().element_summary(x),pid):pid for pid in ids}
@@ -77,7 +77,7 @@ def main():
         send_email(f"FPL GW{gw} recommendation withheld","# FPL Recommendation Withheld\n\n## Manual check required\n"+"\n".join(f"- {x}" for x in state.get("warnings",[])))
         return 2
 
-    summaries=summaries_for_candidates(client,players,state)
+    summaries={} if gw == 1 else summaries_for_candidates(client,players,state)
     owned={int(x["player_id"]) for x in state.get("squad",[])}
     ranked=sorted(players,key=lambda p:(int(p["id"]) in owned,float(p.get("ep_next") or 0),float(p.get("selected_by_percent") or 0)),reverse=True)
     news_names=[p["web_name"] for p in ranked[:cfg["news"]["max_players"]]]
@@ -99,8 +99,19 @@ def main():
     chip_map=opportunity_map(fixtures,teams,gw,cfg)
     plans=augment_with_chip_plans(plans,state,players,players_by_id,proj_by_id,gw,cfg,chip_map)
     public_gw=gw-1 if gw>1 else None
-    cache,warn_elite=discover(client,cfg["elite"],gw,cfg["elite_cache_file"]) if cfg["elite"]["enabled"] else ({},[])
-    elite=summarize(client,cache,public_gw,players_by_id,gw) if cfg["elite"]["enabled"] else {"status":"disabled"}
+    if gw == 1:
+        cache, warn_elite = {}, []
+        elite = {
+            "status": "unavailable",
+            "reason": "GW1 has no locked elite-manager picks; cohort discovery is skipped to avoid useless API work.",
+            "weight_current": 0.0
+        }
+    elif cfg["elite"]["enabled"]:
+        cache,warn_elite=discover(client,cfg["elite"],gw,cfg["elite_cache_file"])
+        elite=summarize(client,cache,public_gw,players_by_id,gw)
+    else:
+        cache,warn_elite={},[]
+        elite={"status":"disabled"}
 
     pe=sorted(projections,key=lambda r:(r["player_id"] in owned,r["gw6"],r["gw3"]),reverse=True)[:90]
     payload={"mode":state["mode"],"report_type":kind,"delivery_mode":delivery,"gameweek":gw,

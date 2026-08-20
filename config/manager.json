@@ -44,7 +44,7 @@
     "overall_league_id": 314,
     "historical_core_size": 100,
     "current_cohort_size": 75,
-    "candidate_pages": 16,
+    "candidate_pages": 5,
     "min_past_seasons": 3,
     "max_historical_median_rank": 300000,
     "current_quality_floor_median_rank": 500000,
@@ -52,7 +52,7 @@
   },
   "news": {
     "enabled": true,
-    "max_players": 45,
+    "max_players": 35,
     "allowed_domains": [
       "premierleague.com",
       "arsenal.com",
