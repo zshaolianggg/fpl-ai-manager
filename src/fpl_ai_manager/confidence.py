@@ -11,7 +11,8 @@ def recommendation_confidence(state, chosen, projections_by_id, news_warnings, d
     elif low>=2: penalty+=1
     if news_warnings: penalty+=1
     if len(data_warnings)>=2: penalty+=1
-    if plan_gap < .75: penalty+=1
+    if plan_gap < .25: penalty+=2
+    elif plan_gap < .75: penalty+=1
     if penalty==0:return "HIGH"
     if penalty<=2:return "MEDIUM"
     return "LOW"

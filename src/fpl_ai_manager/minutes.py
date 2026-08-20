@@ -45,4 +45,11 @@ def expected_minutes(player, history, prior_understat, news_index, congestion_da
     if congestion_days is not None and congestion_days < 4:
         base *= 0.93
 
+    starts_recent=sum(_num(r.get("minutes"))>=60 for r in recent[-4:]) if recent else 0
+    if confidence=="LOW":
+        if recent and starts_recent <= 1:
+            base *= 0.90
+        elif not recent and player.get("status")=="a":
+            base *= 0.96
+
     return round(max(0.0,min(90.0,base)),1), confidence

@@ -7,11 +7,11 @@ def robust_points(row, gw):
     raw = float(row["per_gw"].get(gw, 0))
     return raw * CONFIDENCE_FACTOR.get(row.get("confidence","LOW"), 0.88)
 
+def _ownership(row):
+    try: return float(row.get("selected_by_percent") or 0)
+    except (TypeError,ValueError): return 0.0
+
 def _captain(starters, proj_by_id, gw):
-    """Balanced-risk captaincy.
-    MID/FWD is the default captain pool. A GK/DEF may captain only when its
-    robust projection materially beats the best attacking option.
-    """
     ranked = sorted(starters, key=lambda x: robust_points(proj_by_id[x[0]], gw), reverse=True)
     attackers = [x for x in ranked if proj_by_id[x[0]]["position"] in {3,4}
                  and proj_by_id[x[0]].get("expected_minutes",0) >= 65]
@@ -22,6 +22,14 @@ def _captain(starters, proj_by_id, gw):
         margin = 2.5 if conf == "LOW" else 1.5
         if robust_points(proj_by_id[top[0]],gw) < robust_points(proj_by_id[best_attack[0]],gw) + margin:
             top = best_attack
+    premium_attackers=[x for x in attackers if proj_by_id[x[0]].get("price",0) >= 120]
+    if premium_attackers:
+        eo_anchor=max(premium_attackers, key=lambda x:_ownership(proj_by_id[x[0]]))
+        anchor_row=proj_by_id[eo_anchor[0]]
+        if anchor_row.get("confidence","LOW")=="LOW":
+            edge=robust_points(proj_by_id[top[0]],gw)-robust_points(anchor_row,gw)
+            if edge < 1.25:
+                top=eo_anchor
     remaining_attackers=[x for x in attackers if x[0] != top[0]]
     vice=remaining_attackers[0] if remaining_attackers else next(x for x in ranked if x[0] != top[0])
     return top, vice

@@ -178,7 +178,30 @@ def initial_build_plans(players, players_by_id, proj_by_id, next_gw, cfg):
         if not validate_plan(plan,players_by_id,proj_by_id):
             plans.append(plan)
     plans.sort(key=lambda p:p["optimizer_score"],reverse=True)
+    plans=cluster_sort(plans,proj_by_id,0.50)
     return diversify(plans,cfg["optimizer"]["top_plans"])
+
+def robustness_tiebreak(plan, proj_by_id):
+    squad=plan["squad_ids"]
+    low_minutes=sum(proj_by_id[p].get("expected_minutes",0)<65 for p in squad)
+    low_conf=sum(proj_by_id[p].get("confidence")=="LOW" for p in squad)
+    expensive_bench=sum(1 for p in plan["lineup"].get("bench",[])
+                        if proj_by_id[p]["position"] in {3,4} and proj_by_id[p].get("price",0)>=70)
+    captain=plan["lineup"]["captain"]
+    cap_row=proj_by_id[captain]
+    cap_quality=(1 if cap_row["position"] in {3,4} else 0)+(1 if cap_row.get("expected_minutes",0)>=75 else 0)
+    return round(0.35*cap_quality - 0.08*low_minutes - 0.03*low_conf - 0.25*expensive_bench,3)
+
+def cluster_sort(plans, proj_by_id, cluster_width=.50):
+    if not plans:return plans
+    plans=sorted(plans,key=lambda p:p["optimizer_score"],reverse=True)
+    top=plans[0]["optimizer_score"]
+    cluster=[p for p in plans if top-p["optimizer_score"]<=cluster_width]
+    rest=[p for p in plans if top-p["optimizer_score"]>cluster_width]
+    for p in cluster:
+        p["robustness_tiebreak"]=robustness_tiebreak(p,proj_by_id)
+    cluster.sort(key=lambda p:(p["robustness_tiebreak"],p["optimizer_score"]),reverse=True)
+    return cluster+rest
 
 def diversify(plans,n):
     out=[]
@@ -248,6 +271,7 @@ def managed_plans(state, players_by_id, projections, proj_by_id, next_gw, cfg):
         frontier=list(dedup.values())[:cfg["optimizer"]["beam_width"]]
         all_plans += frontier
     all_plans.sort(key=lambda p:p["optimizer_score"],reverse=True)
+    all_plans=cluster_sort(all_plans,proj_by_id,0.50)
     return diversify(all_plans,cfg["optimizer"]["top_plans"]), base
 
 def plans_csv(plans, players_by_id):

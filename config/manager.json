@@ -37,7 +37,8 @@
     "top_plans": 20,
     "beam_width": 120,
     "candidate_per_position": 22,
-    "max_transfers_considered": 4
+    "max_transfers_considered": 4,
+    "near_tie_cluster_width_points": 0.5
   },
   "elite": {
     "enabled": true,
@@ -81,7 +82,9 @@
       "espn.com",
       "fantasyfootballscout.co.uk",
       "allaboutfpl.com"
-    ]
+    ],
+    "retry_attempts": 3,
+    "per_attempt_timeout_seconds": 35
   },
   "stats": {
     "understat_enabled": true,
@@ -104,7 +107,8 @@
     "default_pool": "MID/FWD",
     "defensive_override_margin_high_or_medium": 1.5,
     "defensive_override_margin_low_confidence": 2.5,
-    "vice_default_pool": "MID/FWD"
+    "vice_default_pool": "MID/FWD",
+    "low_confidence_premium_anchor_override_margin": 1.25
   },
   "gw1": {
     "hold_all_chips": true,

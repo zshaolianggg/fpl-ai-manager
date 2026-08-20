@@ -57,5 +57,10 @@ def render_report(gw,kind,delivery,mode,plan,decision,players,proj,base_plan=Non
         lines.append(f"- Alternative optimizer plan: `{decision['alternative_plan_id']}`. See optimizer-plans.csv for exact comparison.")
     else:
         lines.append("- No close alternative identified.")
-    lines += ["","## Confidence / data quality",f"- Overall: **{decision['confidence']}**","- Exact legality, affordability, lineup, chip eligibility and projection arithmetic were recomputed after AI selection."]
+    lines += ["","## Confidence / data quality",f"- Overall: **{decision['confidence']}**"]
+    if decision.get("plan_separation_note"):
+        lines.append(f"- {decision['plan_separation_note']}")
+    if decision.get("news_status"):
+        lines.append(f"- News research status: **{decision['news_status']}**")
+    lines.append("- Exact legality, affordability, lineup, chip eligibility and projection arithmetic were recomputed after AI selection.")
     return "\n".join(lines)

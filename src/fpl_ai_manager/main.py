@@ -152,6 +152,11 @@ def main():
     sorted_scores=sorted((p["optimizer_score"] for p in plans),reverse=True)
     sep=(sorted_scores[0]-sorted_scores[1]) if len(sorted_scores)>1 else 9
     decision["confidence"]=recommendation_confidence(state,chosen,proj_by_id,warn_news,warn_stats+warn_elite,sep)
+    if sep < 0.50:
+        decision["plan_separation_note"]=f"Low optimizer separation: top plans are clustered within {sep:.2f} points; small rank differences should be treated as noise."
+    else:
+        decision["plan_separation_note"]=f"Optimizer separation between the top two plans: {sep:.2f} points."
+    decision["news_status"]=news.get("status","OK")
     body=render_report(gw,kind,delivery,state["mode"],chosen,decision,players_by_id,proj_by_id,base,chip_map,elite,news)
     evidence={"generated_at":datetime.now(timezone.utc).isoformat(),"gameweek":gw,"state":state,"news":news,
       "sources":[{"url":x.get("source_url"),"title":x.get("source_title"),"timestamp":x.get("published_at"),"tier":x.get("source_tier"),"confidence":x.get("confidence"),"claim":x.get("claim")} for x in news.get("items",[])],

@@ -132,3 +132,12 @@ From GW2 onward, player-history enrichment is capped to a compact candidate set,
 ## GW1 robust-market guardrails
 
 When GW1 projections are LOW confidence, the optimizer adds a bounded official-FPL market prior. This is only a balanced-risk sanity input, not the core projection model. Ultra-high-owned premium MID/FWD captain candidates (>=60% ownership, >=£12.0m) require exposure to at least one such asset. Captain and vice-captain both default to MID/FWD unless a defensive asset has a genuinely material robust edge.
+
+
+## Production uncertainty hardening
+
+- LOW-confidence captaincy uses hysteresis: a high-ownership premium attacker keeps the armband unless another attacker has a meaningful robust edge.
+- Expensive attackers are penalized when benched behind marginal starters without a clear projection reason.
+- Near-tied optimizer plans (within 0.5 points) are treated as a cluster and receive a small robustness tie-break using captain quality, expected minutes, LOW-confidence exposure and expensive bench usage.
+- News research retries up to three times with backoff, records exact exception types/messages, relaxes domain filtering only after curated attempts fail, and marks the email `DEGRADED` if all attempts fail.
+- Very low optimizer separation lowers recommendation confidence and is shown explicitly in the email.

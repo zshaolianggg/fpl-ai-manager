@@ -1,7 +1,7 @@
 
 from __future__ import annotations
 from datetime import datetime, timezone
-import json, os
+import json, os, time
 from openai import OpenAI
 
 NEWS_SCHEMA = {
@@ -44,7 +44,7 @@ Return only evidence that could change expected minutes, starting probability, r
 
 def research_news(players, allowed_domains, model=None, report_type='preview', fresh_after=None):
     if not os.getenv("OPENAI_API_KEY"):
-        return {"items":[],"freshness_note":"OPENAI_API_KEY unavailable; news research skipped."}, ["Fresh news unavailable."]
+        return {"items":[],"freshness_note":"OPENAI_API_KEY unavailable; news research skipped.","status":"DEGRADED","attempt_errors":["missing_api_key"]}, ["Fresh news unavailable: OPENAI_API_KEY missing."]
     client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
     model = model or os.getenv("OPENAI_MODEL","gpt-5")
     prompt = (
@@ -54,17 +54,32 @@ def research_news(players, allowed_domains, model=None, report_type='preview', f
         + "\nFor Final/Sleep-safe reports, prioritize same-day official press-conference/team updates."
         + "\nPlayers:\n" + "\n".join(f"- {x}" for x in players)
     )
-    try:
-        resp = client.responses.create(
-            model=model,
-            instructions=SYSTEM,
-            input=prompt,
-            tools=[{"type":"web_search","filters":{"allowed_domains":allowed_domains}}],
-            text={"format":NEWS_SCHEMA},
-        )
-        return json.loads(resp.output_text), []
-    except Exception as exc:
-        return {"items":[],"freshness_note":f"News research failed: {exc}"}, [f"Fresh news unavailable: {exc}"]
+    errors=[]
+    attempts=[
+        {"domains":allowed_domains,"label":"curated-domain search"},
+        {"domains":allowed_domains[:12],"label":"reduced-domain search"},
+        {"domains":None,"label":"fallback web search"},
+    ]
+    for i,attempt in enumerate(attempts,1):
+        try:
+            tool={"type":"web_search"}
+            if attempt["domains"]:
+                tool["filters"]={"allowed_domains":attempt["domains"]}
+            resp=client.responses.create(
+                model=model,instructions=SYSTEM,input=prompt+f"\nAttempt mode: {attempt['label']}",
+                tools=[tool],text={"format":NEWS_SCHEMA},timeout=35.0
+            )
+            data=json.loads(resp.output_text)
+            data["status"]="OK"
+            data["attempt_errors"]=errors
+            data["successful_attempt"]=attempt["label"]
+            return data,[]
+        except Exception as exc:
+            errors.append(f"attempt {i} ({attempt['label']}): {type(exc).__name__}: {exc}")
+            if i < len(attempts):
+                time.sleep(1.5*i)
+    note="Fresh news unavailable after retries. " + " | ".join(errors)
+    return {"items":[],"freshness_note":note,"status":"DEGRADED","attempt_errors":errors}, [note]
 
 def news_by_player(news):
     out = {}
