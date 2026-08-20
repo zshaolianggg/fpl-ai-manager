@@ -127,3 +127,8 @@ From GW2 onward, player-history enrichment is capped to a compact candidate set,
 - All GW1 chips are held by policy; future chip plans are scored on net advantage over an opportunity-cost threshold rather than raw chip-added points.
 - Excess GW1 cash above £1.0m is mildly penalized so flexibility does not become unused-budget hoarding.
 - GW1 requires at least one high-price MID/FWD captaincy anchor when the player pool contains one, without hard-coding a specific player.
+
+
+## GW1 robust-market guardrails
+
+When GW1 projections are LOW confidence, the optimizer adds a bounded official-FPL market prior. This is only a balanced-risk sanity input, not the core projection model. Ultra-high-owned premium MID/FWD captain candidates (>=60% ownership, >=£12.0m) require exposure to at least one such asset. Captain and vice-captain both default to MID/FWD unless a defensive asset has a genuinely material robust edge.

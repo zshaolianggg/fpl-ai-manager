@@ -67,6 +67,20 @@ def _ilp_squads(players, proj_by_id, budget, weights, top_n=20, min_minutes_play
     return found
 
 
+
+def _gw1_market_prior(row):
+    try:
+        own=float(row.get("selected_by_percent") or 0)
+    except (TypeError,ValueError):
+        own=0.0
+    price=float(row.get("price") or 0)
+    pos=int(row.get("position") or 0)
+    if pos not in {3,4}:
+        return min(0.6, max(0.0, own-25)/50.0)
+    ownership_component=max(0.0,own-25.0)/15.0
+    premium_component=max(0.0,price-95.0)/40.0
+    return min(4.0, ownership_component+premium_component)
+
 def _gw1_ilp_squads(players, proj_by_id, budget, weights, bench_weight, top_n=30):
     """Optimize the actual GW1 decision: 15-man squad + legal XI + captain.
     Bench is valued at only the agreed 20%, so this cannot silently build a
@@ -84,6 +98,8 @@ def _gw1_ilp_squads(players, proj_by_id, budget, weights, bench_weight, top_n=30
         r=proj_by_id[pid]
         conf={"HIGH":1.0,"MEDIUM":0.96,"LOW":0.88}.get(r.get("confidence","LOW"),0.88)
         util[pid]=conf*(weights["gw1"]*r["gw1"]+weights["gw3"]*r["gw3"]+weights["gw6"]*r["gw6"])
+        if r.get("confidence","LOW")=="LOW":
+            util[pid] += _gw1_market_prior(r)
         cap_util[pid]=robust_points(r,1)
 
     # x contributes discounted bench value; y upgrades selected players from
@@ -121,6 +137,12 @@ def _gw1_ilp_squads(players, proj_by_id, budget, weights, bench_weight, top_n=30
              and proj_by_id[p]["expected_minutes"]>=65]
     if anchors:
         prob += pulp.lpSum(x[p] for p in anchors)>=1
+    eo_anchors=[p for p in ids if proj_by_id[p]["position"] in {3,4}
+                and proj_by_id[p]["price"]>=120
+                and float(proj_by_id[p].get("selected_by_percent") or 0)>=60
+                and proj_by_id[p]["expected_minutes"]>=65]
+    if eo_anchors:
+        prob += pulp.lpSum(x[p] for p in eo_anchors)>=1
 
     solver=pulp.PULP_CBC_CMD(msg=False)
     found=[]

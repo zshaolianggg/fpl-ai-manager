@@ -103,12 +103,19 @@
   "captaincy": {
     "default_pool": "MID/FWD",
     "defensive_override_margin_high_or_medium": 1.5,
-    "defensive_override_margin_low_confidence": 2.5
+    "defensive_override_margin_low_confidence": 2.5,
+    "vice_default_pool": "MID/FWD"
   },
   "gw1": {
     "hold_all_chips": true,
     "bench_weight": 0.2,
     "max_unpenalized_bank_tenths": 10,
-    "require_attacking_anchor_price_tenths": 100
+    "require_attacking_anchor_price_tenths": 100,
+    "market_prior": {
+      "enabled_when_projection_confidence": "LOW",
+      "bounded_max_utility_bonus": 4.0,
+      "ultra_high_ownership_threshold_percent": 60,
+      "premium_anchor_min_price_tenths": 120
+    }
   }
 }

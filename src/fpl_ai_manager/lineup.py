@@ -22,7 +22,8 @@ def _captain(starters, proj_by_id, gw):
         margin = 2.5 if conf == "LOW" else 1.5
         if robust_points(proj_by_id[top[0]],gw) < robust_points(proj_by_id[best_attack[0]],gw) + margin:
             top = best_attack
-    vice = next(x for x in ranked if x[0] != top[0])
+    remaining_attackers=[x for x in attackers if x[0] != top[0]]
+    vice=remaining_attackers[0] if remaining_attackers else next(x for x in ranked if x[0] != top[0])
     return top, vice
 
 def best_lineup(squad_ids, proj_by_id, gw, bench_weight=.2, bench_boost=False, triple_captain=False):

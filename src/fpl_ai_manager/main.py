@@ -22,7 +22,10 @@ from .report_state import load as load_report_state,gw_state,mark_sent,mark_late
 
 ROOT=Path(__file__).resolve().parents[2]
 def load_cfg():return json.loads((ROOT/"config/manager.json").read_text())
-def compact_plan(p):return {k:v for k,v in p.items() if k!="metrics"}|{"metrics":{k:v for k,v in p["metrics"].items() if k!="lineups"}}
+def compact_plan(p, rank=None):
+    out={k:v for k,v in p.items() if k!="metrics"}|{"metrics":{k:v for k,v in p["metrics"].items() if k!="lineups"}}
+    if rank is not None: out["optimizer_rank"]=rank
+    return out
 
 def summaries_for_candidates(client,players,state):
     owned={int(x["player_id"]) for x in state.get("squad",[])}
@@ -116,7 +119,7 @@ def main():
     pe=sorted(projections,key=lambda r:(r["player_id"] in owned,r["gw6"],r["gw3"]),reverse=True)[:90]
     payload={"mode":state["mode"],"report_type":kind,"delivery_mode":delivery,"gameweek":gw,
       "objective":cfg["objective"],"risk_profile":cfg["risk_profile"],"state":state,
-      "optimizer_plans":[compact_plan(p) for p in plans],"projection_evidence":pe,
+      "optimizer_plans":[compact_plan(p,i+1) for i,p in enumerate(plans)],"projection_evidence":pe,
       "elite_signal":elite,"chip_opportunities":chip_map,"news":news,
       "warnings":state.get("warnings",[])+warn_news+warn_stats+warn_elite,
       "policy":{"projection_weights":cfg["projection_weights"],"bench_weight":cfg["bench_weight"],
@@ -128,6 +131,12 @@ def main():
     chosen=lookup[decision["plan_id"]];top=plans[0]
     gap=top["optimizer_score"]-chosen["optimizer_score"]
     material_news=any(i.get("confidence") in {"HIGH","MEDIUM"} and i.get("status") in {"ruled_out","major_doubt","rotation_risk"} for i in news.get("items",[]))
+    all_low=all(r.get("confidence")=="LOW" for r in projections if r["player_id"] in set(top["squad_ids"]))
+    if all_low and not material_news and chosen["plan_id"] != top["plan_id"]:
+        chosen=top
+        decision["plan_id"]=top["plan_id"]
+        decision["executive_reasoning"]="All relevant GW1 projections are LOW confidence and no material HIGH/MEDIUM news is available, so the deterministic optimizer rank #1 is used rather than allowing an AI tie-break override."
+        gap=0.0
     if gap>cfg["ai_override_margin_points"] and not material_news:
         send_email(f"FPL GW{gw} recommendation withheld",f"# FPL Recommendation Withheld\n\n- AI override exceeded {cfg['ai_override_margin_points']} points without material news.");return 5
 
