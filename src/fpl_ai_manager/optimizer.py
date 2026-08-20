@@ -5,7 +5,7 @@ from itertools import combinations
 from collections import Counter
 import csv, io, hashlib, json
 import pulp
-from .lineup import best_lineup
+from .lineup import best_lineup, robust_points
 from .validator import validate_squad, validate_plan
 
 def _pid(plan): 
@@ -66,20 +66,95 @@ def _ilp_squads(players, proj_by_id, budget, weights, top_n=20, min_minutes_play
         prob += pulp.lpSum(x[p] for p in squad)<=14
     return found
 
+
+def _gw1_ilp_squads(players, proj_by_id, budget, weights, bench_weight, top_n=30):
+    """Optimize the actual GW1 decision: 15-man squad + legal XI + captain.
+    Bench is valued at only the agreed 20%, so this cannot silently build a
+    Bench-Boost-shaped squad.
+    """
+    prob=pulp.LpProblem("fpl_gw1_squad",pulp.LpMaximize)
+    ids=[int(p["id"]) for p in players if int(p["id"]) in proj_by_id and p.get("status") not in {"u","i","s"}]
+    x={pid:pulp.LpVariable(f"x_{pid}",cat="Binary") for pid in ids}
+    y={pid:pulp.LpVariable(f"y_{pid}",cat="Binary") for pid in ids}
+    c={pid:pulp.LpVariable(f"c_{pid}",cat="Binary") for pid in ids}
+
+    util={}
+    cap_util={}
+    for pid in ids:
+        r=proj_by_id[pid]
+        conf={"HIGH":1.0,"MEDIUM":0.96,"LOW":0.88}.get(r.get("confidence","LOW"),0.88)
+        util[pid]=conf*(weights["gw1"]*r["gw1"]+weights["gw3"]*r["gw3"]+weights["gw6"]*r["gw6"])
+        cap_util[pid]=robust_points(r,1)
+
+    # x contributes discounted bench value; y upgrades selected players from
+    # bench-value to starter-value. Captain adds one extra GW1 score.
+    prob += (
+        pulp.lpSum(bench_weight*util[p]*x[p] + (1-bench_weight)*util[p]*y[p] for p in ids)
+        + pulp.lpSum(cap_util[p]*c[p] for p in ids)
+    )
+    prob += pulp.lpSum(x.values())==15
+    prob += pulp.lpSum(y.values())==11
+    prob += pulp.lpSum(c.values())==1
+    for p in ids:
+        prob += y[p] <= x[p]
+        prob += c[p] <= y[p]
+
+    for pos,count in {1:2,2:5,3:5,4:3}.items():
+        prob += pulp.lpSum(x[p] for p in ids if proj_by_id[p]["position"]==pos)==count
+    prob += pulp.lpSum(y[p] for p in ids if proj_by_id[p]["position"]==1)==1
+    prob += pulp.lpSum(y[p] for p in ids if proj_by_id[p]["position"]==2)>=3
+    prob += pulp.lpSum(y[p] for p in ids if proj_by_id[p]["position"]==2)<=5
+    prob += pulp.lpSum(y[p] for p in ids if proj_by_id[p]["position"]==3)>=2
+    prob += pulp.lpSum(y[p] for p in ids if proj_by_id[p]["position"]==3)<=5
+    prob += pulp.lpSum(y[p] for p in ids if proj_by_id[p]["position"]==4)>=1
+    prob += pulp.lpSum(y[p] for p in ids if proj_by_id[p]["position"]==4)<=3
+
+    clubs={proj_by_id[p]["team_id"] for p in ids}
+    for club in clubs:
+        prob += pulp.lpSum(x[p] for p in ids if proj_by_id[p]["team_id"]==club)<=3
+    prob += pulp.lpSum(proj_by_id[p]["price"]*x[p] for p in ids)<=budget
+    prob += pulp.lpSum(x[p] for p in ids if proj_by_id[p]["expected_minutes"]>=60)>=13
+
+    # Balanced-risk initial structure: at least one high-price attacking
+    # captaincy anchor, without hard-coding any player by name.
+    anchors=[p for p in ids if proj_by_id[p]["position"] in {3,4} and proj_by_id[p]["price"]>=100
+             and proj_by_id[p]["expected_minutes"]>=65]
+    if anchors:
+        prob += pulp.lpSum(x[p] for p in anchors)>=1
+
+    solver=pulp.PULP_CBC_CMD(msg=False)
+    found=[]
+    for _ in range(top_n):
+        if pulp.LpStatus[prob.solve(solver)]!="Optimal": break
+        squad=[p for p in ids if x[p].value() and x[p].value()>.5]
+        found.append(squad)
+        prob += pulp.lpSum(x[p] for p in squad)<=14
+    return found
+
 def initial_build_plans(players, players_by_id, proj_by_id, next_gw, cfg):
     weights=cfg["projection_weights"]; bench=cfg["bench_weight"]
-    squads=_ilp_squads(players,proj_by_id,1000,weights,max(30,cfg["optimizer"]["top_plans"]))
+    squads=_gw1_ilp_squads(players,proj_by_id,1000,weights,bench,max(35,cfg["optimizer"]["top_plans"]))
     plans=[]
     for squad in squads:
         spend=sum(proj_by_id[p]["price"] for p in squad)
         met=plan_metrics(squad,proj_by_id,next_gw,weights,bench)
-        flex=flexibility_adjustment(squad,proj_by_id,1000-spend,cfg["flexibility_cap_points"])
-        plan={"transfers":[],"squad_ids":squad,"bank_after":1000-spend,"hit_cost":0,"chip":None,
-              "metrics":met,"flexibility_adjustment":flex,
-              "optimizer_score":round(met["weighted"]+flex,2),"lineup":met["lineups"][next_gw],
-              "reason_flags":["GW1 initial build","flexibility reserved"]}
+        bank=1000-spend
+        # Keeping a little bank is useful; hoarding >£1.0m in GW1 is a mild
+        # structural cost because it sacrifices starting-XI power.
+        excess_bank_penalty=max(0,(bank-10)/5)*0.35
+        flex=max(0, flexibility_adjustment(squad,proj_by_id,bank,cfg["flexibility_cap_points"])-excess_bank_penalty)
+        robust_weighted=(
+            weights["gw1"]*met["lineups"][next_gw]["robust_score"]
+            + weights["gw3"]*sum(met["lineups"][next_gw+i]["robust_score"] for i in range(3))
+            + weights["gw6"]*sum(met["lineups"][next_gw+i]["robust_score"] for i in range(6))
+        )
+        plan={"transfers":[],"squad_ids":squad,"bank_after":bank,"hit_cost":0,"chip":None,
+              "metrics":met,"flexibility_adjustment":round(flex,2),
+              "optimizer_score":round(robust_weighted+flex,2),"lineup":met["lineups"][next_gw],
+              "reason_flags":["GW1 XI-first optimization","bench weighted 20%","uncertainty-discounted"]}
         plan["plan_id"]=_pid(plan)
-        if not validate_plan(plan,players_by_id,proj_by_id): plans.append(plan)
+        if not validate_plan(plan,players_by_id,proj_by_id):
+            plans.append(plan)
     plans.sort(key=lambda p:p["optimizer_score"],reverse=True)
     return diversify(plans,cfg["optimizer"]["top_plans"])
 
@@ -106,9 +181,10 @@ def managed_plans(state, players_by_id, projections, proj_by_id, next_gw, cfg):
     sell={int(x["player_id"]):int(x["selling_price"]) for x in state["squad"]}
     candidates=_candidate_ids(projections,set(current),cfg)
     base_met=plan_metrics(current,proj_by_id,next_gw,weights,bench)
+    base_robust=weights["gw1"]*base_met["lineups"][next_gw]["robust_score"]+weights["gw3"]*sum(base_met["lineups"][next_gw+i]["robust_score"] for i in range(3))+weights["gw6"]*sum(base_met["lineups"][next_gw+i]["robust_score"] for i in range(6))
     base={"transfers":[],"squad_ids":current,"bank_after":int(state["bank"]),"hit_cost":0,"chip":None,
           "metrics":base_met,"flexibility_adjustment":flexibility_adjustment(current,proj_by_id,int(state["bank"]),cfg["flexibility_cap_points"]),
-          "optimizer_score":base_met["weighted"],"lineup":base_met["lineups"][next_gw],
+          "optimizer_score":round(base_robust,2),"lineup":base_met["lineups"][next_gw],
           "reason_flags":["ROLL"]}
     base["plan_id"]=_pid(base)
     frontier=[base]; all_plans=[base]
@@ -135,7 +211,8 @@ def managed_plans(state, players_by_id, projections, proj_by_id, next_gw, cfg):
                     if hit==4 and not (gross>=cfg["hit_rules"]["minus4_min_gross_gain"] and structural): continue
                     if hit>=8 and not (gross>=cfg["hit_rules"]["minus8_min_gross_gain"] and structural): continue
                     flex=flexibility_adjustment(squad,proj_by_id,bank,cfg["flexibility_cap_points"])
-                    score=met["weighted"]-hit+flex
+                    robust=weights["gw1"]*met["lineups"][next_gw]["robust_score"]+weights["gw3"]*sum(met["lineups"][next_gw+i]["robust_score"] for i in range(3))+weights["gw6"]*sum(met["lineups"][next_gw+i]["robust_score"] for i in range(6))
+                    score=robust-hit+flex
                     p={"transfers":transfers,"squad_ids":squad,"bank_after":bank,"hit_cost":hit,"chip":None,
                        "metrics":met,"flexibility_adjustment":flex,"optimizer_score":round(score,2),
                        "lineup":met["lineups"][next_gw],"reason_flags":["structural" if structural else "points"]}

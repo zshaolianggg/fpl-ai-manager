@@ -118,3 +118,12 @@ The persistent `.state` / `.cache` GitHub cache is only saved on due report runs
 GW1 skips elite-manager cohort discovery and per-player current-season history calls because there are no locked elite picks or current-season player histories to use before the first deadline.
 
 From GW2 onward, player-history enrichment is capped to a compact candidate set, elite discovery uses a bounded candidate pool and cached cohorts, and optional evidence should degrade gracefully rather than blocking the recommendation.
+
+## Decision-model guardrails added after GW1 audit
+
+- GW1 squad construction optimizes the actual starting XI + captain, with the bench valued at 20% from the start.
+- LOW-confidence projections are discounted in optimizer ranking; displayed projections remain the raw point estimates.
+- Goalkeepers/defenders are not allowed to become balanced-risk captains from a small noisy projection edge.
+- All GW1 chips are held by policy; future chip plans are scored on net advantage over an opportunity-cost threshold rather than raw chip-added points.
+- Excess GW1 cash above £1.0m is mildly penalized so flexibility does not become unused-budget hoarding.
+- GW1 requires at least one high-price MID/FWD captaincy anchor when the player pool contains one, without hard-coding a specific player.

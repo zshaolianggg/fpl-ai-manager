@@ -99,5 +99,16 @@
   },
   "state_file": ".state/manager_state.json",
   "elite_cache_file": ".state/elite_cohort.json",
-  "stats_cache_dir": ".cache"
+  "stats_cache_dir": ".cache",
+  "captaincy": {
+    "default_pool": "MID/FWD",
+    "defensive_override_margin_high_or_medium": 1.5,
+    "defensive_override_margin_low_confidence": 2.5
+  },
+  "gw1": {
+    "hold_all_chips": true,
+    "bench_weight": 0.2,
+    "max_unpenalized_bank_tenths": 10,
+    "require_attacking_anchor_price_tenths": 100
+  }
 }

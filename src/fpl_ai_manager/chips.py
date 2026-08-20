@@ -45,6 +45,10 @@ def _current_structure(chipmap,gw):
 
 def augment_with_chip_plans(plans,state,players,players_by_id,proj_by_id,next_gw,cfg,chip_map):
     if not plans:return plans
+    # Strategic policy: do not spend a chip in GW1. Projection/news uncertainty is maximal,
+    # and future blank/double opportunities are not yet known well enough to beat opportunity cost.
+    if next_gw == 1:
+        return plans
     avail=state.get("chips_available",{})
     weights=cfg["projection_weights"]; bench=cfg["bench_weight"]
     out=list(plans); best=plans[0]; threshold=chip_map["thresholds"]
@@ -54,7 +58,8 @@ def augment_with_chip_plans(plans,state,players,players_by_id,proj_by_id,next_gw
         p=deepcopy(best); p["chip"]="bboost"
         met=plan_metrics(p["squad_ids"],proj_by_id,next_gw,weights,bench,chip="bboost")
         p["metrics"]=met; p["lineup"]=met["lineups"][next_gw]
-        p["optimizer_score"]=round(met["weighted"]-p["hit_cost"]+p.get("flexibility_adjustment",0),2)
+        incremental=max(0.0, (best["lineup"]["bench_points"]-threshold["bboost"])*0.8)
+        p["optimizer_score"]=round(best["optimizer_score"]+incremental,2)
         p["reason_flags"]=p.get("reason_flags",[])+["Bench Boost threshold met"]
         p["plan_id"]=_pid(p); out.append(p)
     # Triple Captain: require a strong normal captain and avoid using if a stronger confirmed double appears in our 8-GW projection window.
@@ -68,7 +73,8 @@ def augment_with_chip_plans(plans,state,players,players_by_id,proj_by_id,next_gw
         p=deepcopy(best); p["chip"]="3xc"
         met=plan_metrics(p["squad_ids"],proj_by_id,next_gw,weights,bench,chip="3xc")
         p["metrics"]=met; p["lineup"]=met["lineups"][next_gw]
-        p["optimizer_score"]=round(met["weighted"]-p["hit_cost"]+p.get("flexibility_adjustment",0),2)
+        incremental=max(0.0, cap_pts-threshold["3xc"])
+        p["optimizer_score"]=round(best["optimizer_score"]+incremental,2)
         p["reason_flags"]=p.get("reason_flags",[])+["Triple Captain threshold met"]
         p["plan_id"]=_pid(p); out.append(p)
     budget=(int(state.get("bank",0))+sum(int(x["selling_price"]) for x in state.get("squad",[]))) if state.get("squad") else 1000
