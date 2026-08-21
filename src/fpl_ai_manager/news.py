@@ -2,7 +2,6 @@
 from __future__ import annotations
 from datetime import datetime, timezone
 import json, os, time
-from openai import OpenAI
 
 NEWS_SCHEMA = {
   "type":"json_schema",
@@ -45,6 +44,7 @@ Return only evidence that could change expected minutes, starting probability, r
 def research_news(players, allowed_domains, model=None, report_type='preview', fresh_after=None):
     if not os.getenv("OPENAI_API_KEY"):
         return {"items":[],"freshness_note":"OPENAI_API_KEY unavailable; news research skipped.","status":"DEGRADED","attempt_errors":["missing_api_key"]}, ["Fresh news unavailable: OPENAI_API_KEY missing."]
+    from openai import OpenAI
     client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
     model = model or os.getenv("OPENAI_MODEL","gpt-5")
     prompt = (

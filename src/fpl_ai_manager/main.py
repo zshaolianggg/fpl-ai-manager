@@ -7,6 +7,7 @@ import json, os
 from .fpl import FPLClient,next_event
 from .state import load_public_state
 from .stats import load_external_stats
+from .rules import season_start_year
 from .news import research_news,news_by_player
 from .projections import build_projections
 from .optimizer import initial_build_plans,managed_plans,plans_csv,plan_metrics
@@ -89,8 +90,8 @@ def main():
     news,warn_news=research_news(news_names,cfg["news"]["allowed_domains"],os.getenv("OPENAI_MODEL","gpt-5"),kind,fresh_after) if cfg["news"]["enabled"] else ({"items":[],"freshness_note":"disabled"},[])
     nidx=news_by_player(news)
 
-    external,warn_stats=load_external_stats({**cfg["stats"],"cache_dir":cfg["stats_cache_dir"]},2026)
-    projections=build_projections(players,teams,fixtures,gw,summaries,external,nidx,cfg["projection_horizon_gws"])
+    external,warn_stats=load_external_stats({**cfg["stats"],"cache_dir":cfg["stats_cache_dir"]},season_start_year(cfg.get("season", "2026/27")))
+    projections=build_projections(players,teams,fixtures,gw,summaries,external,nidx,cfg["projection_horizon_gws"],team_rows=boot.get("teams",[]),season=cfg.get("season","2026/27"))
     proj_by_id={r["player_id"]:r for r in projections}
     if state["mode"]=="gw1_initial_build":
         plans=initial_build_plans(players,players_by_id,proj_by_id,gw,cfg);base=None
