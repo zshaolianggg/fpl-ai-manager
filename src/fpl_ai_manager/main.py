@@ -11,6 +11,8 @@ from .rules import season_start_year
 from .news import research_news,news_by_player
 from .projections import build_projections
 from .optimizer import initial_build_plans,managed_plans,plans_csv,plan_metrics
+from .multigw import ManagerState, plan_multigw
+from .captaincy import recommend_captaincy
 from .elite import discover,summarize
 from .chips import opportunity_map,augment_with_chip_plans
 from .ai import decide,audit_text
@@ -93,13 +95,44 @@ def main():
     external,warn_stats=load_external_stats({**cfg["stats"],"cache_dir":cfg["stats_cache_dir"]},season_start_year(cfg.get("season", "2026/27")))
     projections=build_projections(players,teams,fixtures,gw,summaries,external,nidx,cfg["projection_horizon_gws"],team_rows=boot.get("teams",[]),season=cfg.get("season","2026/27"))
     proj_by_id={r["player_id"]:r for r in projections}
+    multigw_shadow=[]
     if state["mode"]=="gw1_initial_build":
         plans=initial_build_plans(players,players_by_id,proj_by_id,gw,cfg);base=None
     else:
         plans,base=managed_plans(state,players_by_id,projections,proj_by_id,gw,cfg)
+        mg_cfg=cfg.get("multigw",{})
+        if mg_cfg.get("enabled"):
+            try:
+                mg_state=ManagerState.from_public_state(state,gw)
+                multigw_shadow=plan_multigw(
+                    mg_state,players_by_id,projections,proj_by_id,
+                    planning_horizon=int(mg_cfg.get("planning_horizon",4)),
+                    candidate_per_position=int(mg_cfg.get("candidate_per_position",8)),
+                    beam_width=int(mg_cfg.get("beam_width",60)),
+                    max_transfers_per_gw=int(mg_cfg.get("max_transfers_per_gw",2)),
+                    bench_weight=float(cfg.get("bench_weight",.2)),
+                    discount=float(mg_cfg.get("discount",.97)),
+                    top_n=12,
+                    cache_enabled=bool(mg_cfg.get("cache_enabled",True)),
+                )
+            except Exception as exc:
+                # Shadow planning must never block the established V2 decision path.
+                state.setdefault("warnings",[]).append(f"V3 multi-GW shadow planner unavailable: {exc}")
     if not plans:
         send_email(f"FPL GW{gw} recommendation withheld","# FPL Recommendation Withheld\n\n- Optimizer produced no legal plan.");return 3
 
+    captaincy_shadow={}
+    cap_cfg=cfg.get("captaincy",{})
+    if plans and cap_cfg.get("probabilistic_shadow",False):
+        try:
+            captaincy_shadow=recommend_captaincy(
+                plans[0]["lineup"]["starters"],proj_by_id,gw,
+                downside_penalty=float(cap_cfg.get("downside_penalty",.08)),
+                upside_bonus=float(cap_cfg.get("upside_bonus",.03)),
+                defender_override_margin=float(cap_cfg.get("probabilistic_defender_override_margin",1.25)),
+            )
+        except Exception as exc:
+            state.setdefault("warnings",[]).append(f"V3 probabilistic captaincy shadow unavailable: {exc}")
     chip_map=opportunity_map(fixtures,teams,gw,cfg)
     plans=augment_with_chip_plans(plans,state,players,players_by_id,proj_by_id,gw,cfg,chip_map)
     public_gw=gw-1 if gw>1 else None
@@ -121,7 +154,7 @@ def main():
     payload={"mode":state["mode"],"report_type":kind,"delivery_mode":delivery,"gameweek":gw,
       "objective":cfg["objective"],"risk_profile":cfg["risk_profile"],"state":state,
       "optimizer_plans":[compact_plan(p,i+1) for i,p in enumerate(plans)],"projection_evidence":pe,
-      "elite_signal":elite,"chip_opportunities":chip_map,"news":news,
+      "multigw_shadow":multigw_shadow,"captaincy_shadow":captaincy_shadow,"elite_signal":elite,"chip_opportunities":chip_map,"news":news,
       "warnings":state.get("warnings",[])+warn_news+warn_stats+warn_elite,
       "policy":{"projection_weights":cfg["projection_weights"],"bench_weight":cfg["bench_weight"],
                 "ai_override_margin":cfg["ai_override_margin_points"],"alternative_margin":cfg["alternative_margin_points"]}}
@@ -162,7 +195,7 @@ def main():
     evidence={"generated_at":datetime.now(timezone.utc).isoformat(),"gameweek":gw,"state":state,"news":news,
       "sources":[{"url":x.get("source_url"),"title":x.get("source_title"),"timestamp":x.get("published_at"),"tier":x.get("source_tier"),"confidence":x.get("confidence"),"claim":x.get("claim")} for x in news.get("items",[])],
       "external_stats_provider":external.get("provider"),"projection_model":{"type":"component model","weights":cfg["projection_weights"],"bench_weight":cfg["bench_weight"]},
-      "projections":projections,"elite":elite,"chip_opportunities":chip_map,"selected_plan":compact_plan(chosen),"warnings":payload["warnings"]}
+      "projections":projections,"multigw_shadow":multigw_shadow,"captaincy_shadow":captaincy_shadow,"elite":elite,"chip_opportunities":chip_map,"selected_plan":compact_plan(chosen),"warnings":payload["warnings"]}
     attachments=[(f"fpl-gw{gw}-openai-prompt.txt",audit_text(payload),"text/plain"),
       (f"fpl-gw{gw}-evidence-pack.json",json.dumps(evidence,indent=2,default=str),"application/json"),
       (f"fpl-gw{gw}-optimizer-plans.csv",plans_csv(plans,players_by_id),"text/csv")]

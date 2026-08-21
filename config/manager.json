@@ -98,7 +98,12 @@
     "wildcard_late_threshold": 20.0,
     "bench_boost_early_threshold": 16.0,
     "bench_boost_late_threshold": 12.0,
-    "triple_captain_normal_points_target": 10.0
+    "triple_captain_normal_points_target": 10.0,
+    "opportunity_cost_enabled": true,
+    "future_opportunity_reserve_factor": 0.9,
+    "minimum_opportunity_edge_points": 1.0,
+    "confirmed_structure_reserve_points": 2.0,
+    "max_structure_reserve_points": 6.0
   },
   "state_file": ".state/manager_state.json",
   "elite_cache_file": ".state/elite_cohort.json",
@@ -108,7 +113,11 @@
     "defensive_override_margin_high_or_medium": 1.5,
     "defensive_override_margin_low_confidence": 2.5,
     "vice_default_pool": "MID/FWD",
-    "low_confidence_premium_anchor_override_margin": 1.25
+    "low_confidence_premium_anchor_override_margin": 1.25,
+    "probabilistic_shadow": true,
+    "downside_penalty": 0.08,
+    "upside_bonus": 0.03,
+    "probabilistic_defender_override_margin": 1.25
   },
   "gw1": {
     "hold_all_chips": true,
@@ -122,5 +131,16 @@
       "premium_anchor_min_price_tenths": 120
     }
   },
-  "season": "2026/27"
+  "season": "2026/27",
+  "multigw": {
+    "enabled": false,
+    "shadow_mode": true,
+    "planning_horizon": 4,
+    "candidate_per_position": 8,
+    "beam_width": 60,
+    "max_transfers_per_gw": 2,
+    "discount": 0.97,
+    "cache_enabled": true,
+    "include_diagnostics": true
+  }
 }

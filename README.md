@@ -141,3 +141,7 @@ When GW1 projections are LOW confidence, the optimizer adds a bounded official-F
 - Near-tied optimizer plans (within 0.5 points) are treated as a cluster and receive a small robustness tie-break using captain quality, expected minutes, LOW-confidence exposure and expensive bench usage.
 - News research retries up to three times with backoff, records exact exception types/messages, relaxes domain filtering only after curated attempts fail, and marks the email `DEGRADED` if all attempts fail.
 - Very low optimizer separation lowers recommendation confidence and is shown explicitly in the email.
+
+## V3 Alpha 3 status
+
+Alpha 3 adds a memoized multi-GW beam search, a probabilistic captain/vice engine, and opportunity-cost treatment for Bench Boost and Triple Captain. The established deterministic optimizer remains the production authority while the multi-GW and new captaincy layers run in shadow mode. See `V3_BUILD_NOTES_ALPHA3.md` for implementation and validation details.

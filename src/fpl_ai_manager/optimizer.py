@@ -4,7 +4,10 @@ from dataclasses import dataclass
 from itertools import combinations
 from collections import Counter
 import csv, io, hashlib, json
-import pulp
+try:
+    import pulp
+except ModuleNotFoundError:  # Allows non-ILP utilities/tests in lightweight environments.
+    pulp = None
 from .lineup import best_lineup, robust_points
 from .validator import validate_squad, validate_plan
 
@@ -43,6 +46,8 @@ def _purchase_budget(state):
     return int(state["bank"])+sum(int(x["selling_price"]) for x in state["squad"])
 
 def _ilp_squads(players, proj_by_id, budget, weights, top_n=20, min_minutes_players=13, utility_override=None):
+    if pulp is None:
+        raise RuntimeError("PuLP is required for ILP squad optimization. Install project dependencies first.")
     prob=pulp.LpProblem("fpl_squad",pulp.LpMaximize)
     ids=[int(p["id"]) for p in players if int(p["id"]) in proj_by_id and p.get("status") not in {"u"}]
     x={pid:pulp.LpVariable(f"x_{pid}",cat="Binary") for pid in ids}
@@ -86,6 +91,8 @@ def _gw1_ilp_squads(players, proj_by_id, budget, weights, bench_weight, top_n=30
     Bench is valued at only the agreed 20%, so this cannot silently build a
     Bench-Boost-shaped squad.
     """
+    if pulp is None:
+        raise RuntimeError("PuLP is required for GW1 ILP squad optimization. Install project dependencies first.")
     prob=pulp.LpProblem("fpl_gw1_squad",pulp.LpMaximize)
     ids=[int(p["id"]) for p in players if int(p["id"]) in proj_by_id and p.get("status") not in {"u","i","s"}]
     x={pid:pulp.LpVariable(f"x_{pid}",cat="Binary") for pid in ids}
