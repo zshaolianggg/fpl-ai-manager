@@ -121,7 +121,6 @@
   },
   "gw1": {
     "hold_all_chips": true,
-    "bench_weight": 0.2,
     "max_unpenalized_bank_tenths": 10,
     "require_attacking_anchor_price_tenths": 100,
     "market_prior": {
@@ -129,7 +128,13 @@
       "bounded_max_utility_bonus": 4.0,
       "ultra_high_ownership_threshold_percent": 60,
       "premium_anchor_min_price_tenths": 120
-    }
+    },
+    "candidate_generator_bench_weight": 0.08,
+    "candidate_squads": 80,
+    "expensive_deep_bench_penalty": 0.45,
+    "dormant_capital_free_index": 17.0,
+    "dormant_capital_penalty_per_index": 0.08,
+    "dormant_capital_penalty_cap": 1.5
   },
   "season": "2026/27",
   "multigw": {
@@ -141,6 +146,9 @@
     "max_transfers_per_gw": 2,
     "discount": 0.97,
     "cache_enabled": true,
-    "include_diagnostics": true
+    "include_diagnostics": true,
+    "include_chips": true,
+    "dominance_pruning": true,
+    "price_paths_enabled": true
   }
 }

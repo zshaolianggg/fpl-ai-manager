@@ -15,14 +15,16 @@ def _pid(plan):
     raw=json.dumps({"t":plan.get("transfers",[]),"c":plan.get("chip"),"s":sorted(plan.get("squad_ids",[]))},sort_keys=True)
     return hashlib.sha1(raw.encode()).hexdigest()[:10]
 
-def plan_metrics(squad_ids, proj_by_id, next_gw, weights, bench_weight, chip=None):
+def plan_metrics(squad_ids, proj_by_id, next_gw, weights, bench_weight, chip=None, selection_mode="robust"):
+
     per={}
     lineups={}
     for i in range(8):
         gw=next_gw+i
         lu=best_lineup(squad_ids,proj_by_id,gw,bench_weight,
                        bench_boost=(chip=="bboost" and i==0),
-                       triple_captain=(chip=="3xc" and i==0))
+                       triple_captain=(chip=="3xc" and i==0),
+                       selection_mode=selection_mode)
         per[gw]=lu["score"]; lineups[gw]=lu
     h1=per[next_gw]
     h3=sum(per[next_gw+i] for i in range(3))
@@ -160,32 +162,112 @@ def _gw1_ilp_squads(players, proj_by_id, budget, weights, bench_weight, top_n=30
         prob += pulp.lpSum(x[p] for p in squad)<=14
     return found
 
+def _gw1_structural_diagnostics(squad, met, proj_by_id, next_gw):
+    """Explain whether GW1 budget is being parked in players unlikely to be used.
+
+    This is diagnostic/secondary utility only. It deliberately does not impose a
+    hard price ceiling on the bench: an expensive benched player is allowed when
+    the multi-GW projection demonstrates enough future/auto-sub value.
+    """
+    lu = met["lineups"][next_gw]
+    bench = list(lu.get("bench", []))
+    dormant = 0.0
+    expensive = []
+    outfield_slot = 0
+    for pid in bench:
+        row = proj_by_id[pid]
+        if row.get("position") == 1:
+            continue
+        outfield_slot += 1
+        price = float(row.get("price") or 0)
+        p_app = float((row.get("minutes_projection") or {}).get("p_appearance") or min(1.0, float(row.get("expected_minutes") or 0)/65.0))
+        # Probability of actually being called from this bench slot is approximated
+        # by the lineup engine's total auto-sub value allocation: later slots are
+        # increasingly dormant. This is a capital-efficiency signal, not points.
+        slot_use = {1: .18, 2: .09, 3: .04}.get(outfield_slot, .03) * p_app
+        dormant += price * (1.0-slot_use)
+        if price >= 70 and outfield_slot >= 2:
+            expensive.append(pid)
+    starting_cost = sum(float(proj_by_id[p]["price"]) for p in lu.get("starters", []))
+    bench_cost = sum(float(proj_by_id[p]["price"]) for p in bench)
+    future_starts={pid:0 for pid in expensive}
+    for offset in range(1,6):
+        future_lu=met.get("lineups",{}).get(next_gw+offset) or {}
+        for pid in expensive:
+            if pid in future_lu.get("starters",[]):
+                future_starts[pid] += 1
+    return {
+        "starting_cost_tenths": round(starting_cost, 1),
+        "bench_cost_tenths": round(bench_cost, 1),
+        "dormant_capital_index": round(dormant/10.0, 2),
+        "expensive_deep_bench": expensive,
+        "expensive_deep_bench_future_starts_next5": future_starts,
+        "expected_auto_sub_points": float(lu.get("expected_auto_sub_points") or 0),
+        "probabilistic_lineup_score": float(lu.get("probabilistic_score") or lu.get("score") or 0),
+    }
+
+
+def _gw1_v3_score(squad, met, proj_by_id, next_gw, weights, bank, cfg):
+    """V3 GW1 reranker: probabilistic usable points first, structure second."""
+    # The horizons overlap by design to preserve V2 semantics, but use the
+    # probabilistic lineup score (auto-subs + captain fallback) rather than a
+    # fixed percentage of all bench points.
+    prob1 = met["lineups"][next_gw]["probabilistic_score"]
+    prob3 = sum(met["lineups"][next_gw+i]["probabilistic_score"] for i in range(3))
+    prob6 = sum(met["lineups"][next_gw+i]["probabilistic_score"] for i in range(6))
+    core = weights["gw1"]*prob1 + weights["gw3"]*prob3 + weights["gw6"]*prob6
+    diag = _gw1_structural_diagnostics(squad, met, proj_by_id, next_gw)
+
+    gw1_cfg = cfg.get("gw1", {})
+    future_starts=diag.get("expensive_deep_bench_future_starts_next5",{})
+    deep_bench_penalty = 0.0
+    for pid in diag["expensive_deep_bench"]:
+        # If the expensive asset becomes a regular starter immediately, the
+        # apparent GW1 dormancy is justified by explicit multi-GW utility.
+        starts=float(future_starts.get(pid,0))
+        persistence=max(0.0, 1.0-min(1.0, starts/3.0))
+        deep_bench_penalty += float(gw1_cfg.get("expensive_deep_bench_penalty", .45))*persistence
+    # Dormant-capital penalty is intentionally tiny and capped: it only breaks
+    # near-ties unless the squad parks several millions in deep bench slots.
+    dormant_free = float(gw1_cfg.get("dormant_capital_free_index", 17.0))
+    dormant_penalty = min(float(gw1_cfg.get("dormant_capital_penalty_cap", 1.5)),
+                          max(0.0, diag["dormant_capital_index"]-dormant_free) * float(gw1_cfg.get("dormant_capital_penalty_per_index", .08)))
+    excess_bank_penalty=max(0,(bank-float(gw1_cfg.get("max_unpenalized_bank_tenths",10)))/5)*.35
+    flex=max(0, flexibility_adjustment(squad,proj_by_id,bank,cfg["flexibility_cap_points"])-excess_bank_penalty)
+    return round(core + flex - deep_bench_penalty - dormant_penalty, 3), diag, round(flex,2)
+
+
 def initial_build_plans(players, players_by_id, proj_by_id, next_gw, cfg):
-    weights=cfg["projection_weights"]; bench=cfg["bench_weight"]
-    squads=_gw1_ilp_squads(players,proj_by_id,1000,weights,bench,max(35,cfg["optimizer"]["top_plans"]))
+    """V3-aware GW1 build.
+
+    ILP is now only the broad legal candidate generator. Final ranking is based
+    on probabilistic lineup utility and structural capital efficiency, removing
+    the old assumption that every bench player's points are worth a fixed 20%.
+    """
+    weights=cfg["projection_weights"]
+    # Keep the old bench coefficient only to generate a broad candidate set;
+    # it is *not* the final ranking objective.
+    generator_bench=float(cfg.get("gw1",{}).get("candidate_generator_bench_weight", .08))
+    candidate_count=max(int(cfg.get("gw1",{}).get("candidate_squads",80)), cfg["optimizer"]["top_plans"]*3)
+    squads=_gw1_ilp_squads(players,proj_by_id,1000,weights,generator_bench,candidate_count)
     plans=[]
-    for squad in squads:
+    for candidate_rank, squad in enumerate(squads,1):
         spend=sum(proj_by_id[p]["price"] for p in squad)
-        met=plan_metrics(squad,proj_by_id,next_gw,weights,bench)
         bank=1000-spend
-        # Keeping a little bank is useful; hoarding >£1.0m in GW1 is a mild
-        # structural cost because it sacrifices starting-XI power.
-        excess_bank_penalty=max(0,(bank-10)/5)*0.35
-        flex=max(0, flexibility_adjustment(squad,proj_by_id,bank,cfg["flexibility_cap_points"])-excess_bank_penalty)
-        robust_weighted=(
-            weights["gw1"]*met["lineups"][next_gw]["robust_score"]
-            + weights["gw3"]*sum(met["lineups"][next_gw+i]["robust_score"] for i in range(3))
-            + weights["gw6"]*sum(met["lineups"][next_gw+i]["robust_score"] for i in range(6))
-        )
+        met=plan_metrics(squad,proj_by_id,next_gw,weights,0.0,selection_mode="probabilistic")
+        v3_score, diag, flex = _gw1_v3_score(squad,met,proj_by_id,next_gw,weights,bank,cfg)
         plan={"transfers":[],"squad_ids":squad,"bank_after":bank,"hit_cost":0,"chip":None,
-              "metrics":met,"flexibility_adjustment":round(flex,2),
-              "optimizer_score":round(robust_weighted+flex,2),"lineup":met["lineups"][next_gw],
-              "reason_flags":["GW1 XI-first optimization","bench weighted 20%","uncertainty-discounted"]}
+              "metrics":met,"flexibility_adjustment":flex,
+              "optimizer_score":v3_score,"lineup":met["lineups"][next_gw],
+              "optimizer_engine":"V3_GW1_PROBABILISTIC_RERANK",
+              "candidate_generator_rank":candidate_rank,
+              "structural_diagnostics":diag,
+              "reason_flags":["GW1 probabilistic lineup optimization","auto-sub-aware bench valuation","structural capital diagnostics"]}
         plan["plan_id"]=_pid(plan)
         if not validate_plan(plan,players_by_id,proj_by_id):
             plans.append(plan)
     plans.sort(key=lambda p:p["optimizer_score"],reverse=True)
-    plans=cluster_sort(plans,proj_by_id,0.50)
+    plans=cluster_sort(plans,proj_by_id,float(cfg["optimizer"].get("near_tie_cluster_width_points",.50)))
     return diversify(plans,cfg["optimizer"]["top_plans"])
 
 def robustness_tiebreak(plan, proj_by_id):

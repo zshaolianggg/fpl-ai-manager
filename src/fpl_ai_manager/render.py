@@ -7,13 +7,22 @@ def money(t): return f"£{t/10:.1f}m"
 
 def player_name(pid,players): return players[int(pid)]["web_name"]
 
-def render_report(gw,kind,delivery,mode,plan,decision,players,proj,base_plan=None,chip_map=None,elite=None,news=None):
+def render_report(gw,kind,delivery,mode,plan,decision,players,proj,base_plan=None,chip_map=None,elite=None,news=None,decision_audit=None):
     lines=[]
     title=f"FPL GW{gw} {'Initial Squad' if mode=='gw1_initial_build' else kind.title()} Recommendation"
     lines += [f"# {title}","", "## Executive action"]
     if delivery=="sleep_safe":
         lines += ["- **Sleep-safe final:** sent before the 23:00 Beijing cutoff; overnight team news after this report is not included."]
     lines += [f"- **Confidence:** {decision['confidence']}",f"- {decision['executive_reasoning']}"]
+    if decision_audit:
+        lines += ["", "## Decision engine audit"]
+        lines.append(f"- Production optimizer: **{decision_audit.get('production_engine','unknown')}**")
+        if decision_audit.get("shadow_engine"):
+            lines.append(f"- Shadow optimizer: **{decision_audit['shadow_engine']}**")
+        if decision_audit.get("captaincy_shadow_status"):
+            lines.append(f"- Probabilistic captaincy shadow: **{decision_audit['captaincy_shadow_status']}**")
+        if decision_audit.get("agreement"):
+            lines.append(f"- V2/V3 agreement: {decision_audit['agreement']}")
     if mode=="gw1_initial_build":
         lines += ["","## Initial squad"]
         for pos in (1,2,3,4):
@@ -22,6 +31,19 @@ def render_report(gw,kind,delivery,mode,plan,decision,players,proj,base_plan=Non
                 lines.append(f"- {player_name(pid,players)} — {money(proj[pid]['price'])}")
         spent=sum(proj[x]["price"] for x in plan["squad_ids"])
         lines += ["","## Budget check",f"- Squad cost: **{money(spent)}**",f"- Bank: **{money(plan['bank_after'])}**"]
+        diag=plan.get("structural_diagnostics") or {}
+        if diag:
+            lines += ["", "## Squad structure diagnostics"]
+            lines.append(f"- Starting-XI capital: **{money(diag.get('starting_cost_tenths',0))}**")
+            lines.append(f"- Bench capital: **{money(diag.get('bench_cost_tenths',0))}**")
+            lines.append(f"- Expected auto-sub contribution: **{diag.get('expected_auto_sub_points',0):.2f} pts**")
+            deep=diag.get("expensive_deep_bench") or []
+            if deep:
+                starts=diag.get("expensive_deep_bench_future_starts_next5",{})
+                details=", ".join(f"{player_name(pid,players)} ({int(starts.get(pid,0))}/5 projected future starts)" for pid in deep)
+                lines.append(f"- Structural flag: expensive deep-bench capital in **{details}**; V3 only tolerates it when projected near-term starting usage offsets the opportunity cost.")
+            else:
+                lines.append("- Structural check: no expensive outfield player is parked in a deep bench slot.")
     else:
         lines += ["","## Transfers"]
         if plan.get("chip") in {"wildcard","freehit"}:

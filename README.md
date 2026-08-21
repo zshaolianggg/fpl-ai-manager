@@ -145,3 +145,17 @@ When GW1 projections are LOW confidence, the optimizer adds a bounded official-F
 ## V3 Alpha 3 status
 
 Alpha 3 adds a memoized multi-GW beam search, a probabilistic captain/vice engine, and opportunity-cost treatment for Bench Boost and Triple Captain. The established deterministic optimizer remains the production authority while the multi-GW and new captaincy layers run in shadow mode. See `V3_BUILD_NOTES_ALPHA3.md` for implementation and validation details.
+
+## V3 Alpha 4
+
+Alpha 4 extends the shadow multi-GW planner with chip-state and price-path mechanics:
+
+- Wildcard and Free Hit are native sequential planner actions.
+- Free Hit uses a temporary one-week squad and automatically reverts to the permanent squad/value ledger.
+- Wildcard creates a permanent new squad while preserving banked free transfers under the current rules model.
+- State-dominance pruning removes safely dominated search states before beam truncation.
+- Purchase-price ledgers are retained separately from selling prices so projected future selling value follows FPL's profit-sharing rule.
+- Optional `price_path` data can make a future transfer genuinely unaffordable after a modeled rise; optional `price_risk` metadata is surfaced as a warning rather than being allowed to dominate expected points.
+- Chip squad construction in the shadow planner is dependency-light greedy local search. The established V2 ILP remains the production benchmark until replay/shadow validation justifies promotion.
+
+The multi-GW planner remains disabled by default and runs only when `multigw.enabled` is explicitly enabled.

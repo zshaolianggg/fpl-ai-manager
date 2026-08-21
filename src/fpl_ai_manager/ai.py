@@ -26,7 +26,8 @@ The deterministic projection/optimizer is primary. Treat LOW-confidence projecti
 You may choose a non-#1 plan only if it is within 1.5 weighted projected points of #1, unless a material HIGH/MEDIUM news fact makes #1 unsafe; state that reason.
 Use maximum overall rank with balanced risk. In GW1, HOLD all chips. Hits are exceptional. Confirmed blanks/doubles matter for chips; unconfirmed rearrangements must not drive chip use.
 If all relevant projections are LOW confidence and there is no material HIGH/MEDIUM news, prefer optimizer rank #1 unless another plan has a clearly safer balanced-risk structure; never call a non-#1 plan the optimizer top plan. Return one definitive plan. Return an alternative only when within 2 projected points or representing a materially different balanced-risk route.
-Treat source hierarchy as official > reputable > specialist. Missing news lowers confidence but is not negative evidence."""
+Treat source hierarchy as official > reputable > specialist. Missing news lowers confidence but is not negative evidence.
+Never describe a shadow model as the model that selected the production plan. If optimizer_engine or decision_audit is supplied, name the production engine accurately. Do not mention a fixed 20% bench weighting for a V3 GW1 plan; V3 GW1 uses probabilistic auto-sub-aware bench valuation. If the selected squad has structural_diagnostics, explicitly flag unusual expensive deep-bench capital rather than rationalizing it."""
 
 def decide(payload,model=None):
     client=OpenAI(api_key=os.environ["OPENAI_API_KEY"])
@@ -37,7 +38,7 @@ def decide(payload,model=None):
     return json.loads(resp.output_text), resp
 
 def audit_text(payload,model=None):
-    return ("FPL AI Manager v2 - final OpenAI adjudication request\n"
+    return ("FPL AI Manager v3 - final OpenAI adjudication request\n"
             "===================================================\n\n"
             f"model: {model or os.getenv('OPENAI_MODEL','gpt-5')}\n\n"
             "--- instructions ---\n"+SYSTEM+"\n\n--- input ---\n"+

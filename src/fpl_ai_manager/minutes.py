@@ -53,6 +53,38 @@ def _base_minutes(player, history, prior_understat):
     return base, data_conf, recent, reasons
 
 
+
+def _role_start_prior(player, prior_understat, base_minutes):
+    """Role-aware prior used when current-season start evidence is sparse.
+
+    The prior is deliberately generic (no player-name rules). Established
+    high-minute players receive a stronger starting prior; premium/high-owned
+    attacking anchors get only a small additional bump when evidence is sparse.
+    """
+    pmins = _num((prior_understat or {}).get("time"))
+    apps = _num((prior_understat or {}).get("games"))
+    avg = (pmins/apps) if apps > 0 else float(base_minutes or 0)
+    if apps >= 20 and avg >= 75:
+        prior = .92
+        label = "nailed_role_prior"
+    elif apps >= 15 and avg >= 65:
+        prior = .84
+        label = "regular_role_prior"
+    elif apps >= 10 and avg >= 50:
+        prior = .72
+        label = "rotation_starter_prior"
+    else:
+        prior = max(.35, min(.82, avg/90.0))
+        label = "generic_role_prior"
+
+    pos = int(player.get("element_type") or 0)
+    price = _num(player.get("now_cost"), _num(player.get("price")))
+    own = _num(player.get("selected_by_percent"))
+    if pos in {3,4} and price >= 120 and own >= 35 and prior >= .80:
+        prior = max(prior, .94)
+        label = "premium_anchor_role_prior"
+    return min(.98, prior), label
+
 def project_minutes(player, history, prior_understat, news_index, congestion_days=None) -> MinutesProjection:
     base, confidence, recent, reasons = _base_minutes(player, history, prior_understat)
 
@@ -76,9 +108,17 @@ def project_minutes(player, history, prior_understat, news_index, congestion_day
         reasons.append("medium_conf_news")
 
     recent_vals = [_num(r.get("minutes")) for r in recent]
-    start_rate = sum(v >= 45 for v in recent_vals) / len(recent_vals) if recent_vals else min(0.95, base/90)
-    cameo_rate = sum(0 < v < 45 for v in recent_vals) / len(recent_vals) if recent_vals else max(0.02, 0.22*(1-start_rate))
-    p_start = max(0.0, min(0.99, (0.35*(base/90) + 0.65*start_rate) * availability))
+    role_prior, role_label = _role_start_prior(player, prior_understat, base)
+    reasons.append(role_label)
+    if recent_vals:
+        start_rate = sum(v >= 45 for v in recent_vals) / len(recent_vals)
+        evidence_weight = min(.80, .45 + .07*len(recent_vals))
+        blended_start = evidence_weight*start_rate + (1-evidence_weight)*role_prior
+    else:
+        start_rate = role_prior
+        blended_start = role_prior
+    cameo_rate = sum(0 < v < 45 for v in recent_vals) / len(recent_vals) if recent_vals else max(0.02, 0.18*(1-role_prior))
+    p_start = max(0.0, min(0.99, (0.18*(base/90) + 0.82*blended_start) * availability))
 
     if congestion_days is not None and congestion_days < 4:
         # Congestion is modeled principally as rotation/start risk, not a blanket

@@ -114,6 +114,8 @@ def main():
                     discount=float(mg_cfg.get("discount",.97)),
                     top_n=12,
                     cache_enabled=bool(mg_cfg.get("cache_enabled",True)),
+                    include_chips=bool(mg_cfg.get("include_chips",True)),
+                    dominance_pruning=bool(mg_cfg.get("dominance_pruning",True)),
                 )
             except Exception as exc:
                 # Shadow planning must never block the established V2 decision path.
@@ -151,12 +153,27 @@ def main():
         elite={"status":"disabled"}
 
     pe=sorted(projections,key=lambda r:(r["player_id"] in owned,r["gw6"],r["gw3"]),reverse=True)[:90]
+    if state["mode"]=="gw1_initial_build":
+        decision_audit={
+            "production_engine":"V3 GW1 probabilistic/structural reranker",
+            "shadow_engine":None,
+            "captaincy_shadow_status":"available" if captaincy_shadow else "unavailable",
+            "agreement":"Legacy ILP is candidate generation only; final GW1 ranking is V3 probabilistic.",
+        }
+    else:
+        decision_audit={
+            "production_engine":"V2 managed optimizer",
+            "shadow_engine":"V3 multi-GW planner" if multigw_shadow else None,
+            "captaincy_shadow_status":"available" if captaincy_shadow else "unavailable",
+            "agreement":"Not promoted: shadow outputs are evidence only.",
+        }
     payload={"mode":state["mode"],"report_type":kind,"delivery_mode":delivery,"gameweek":gw,
       "objective":cfg["objective"],"risk_profile":cfg["risk_profile"],"state":state,
       "optimizer_plans":[compact_plan(p,i+1) for i,p in enumerate(plans)],"projection_evidence":pe,
-      "multigw_shadow":multigw_shadow,"captaincy_shadow":captaincy_shadow,"elite_signal":elite,"chip_opportunities":chip_map,"news":news,
+      "multigw_shadow":multigw_shadow,"captaincy_shadow":captaincy_shadow,"decision_audit":decision_audit,"elite_signal":elite,"chip_opportunities":chip_map,"news":news,
       "warnings":state.get("warnings",[])+warn_news+warn_stats+warn_elite,
-      "policy":{"projection_weights":cfg["projection_weights"],"bench_weight":cfg["bench_weight"],
+      "policy":{"projection_weights":cfg["projection_weights"],
+                "bench_valuation":"probabilistic auto-sub-aware" if state["mode"]=="gw1_initial_build" else f"legacy managed weight {cfg['bench_weight']}",
                 "ai_override_margin":cfg["ai_override_margin_points"],"alternative_margin":cfg["alternative_margin_points"]}}
     decision,_=decide(payload,os.getenv("OPENAI_MODEL","gpt-5"))
     lookup={p["plan_id"]:p for p in plans}
@@ -174,7 +191,9 @@ def main():
     if gap>cfg["ai_override_margin_points"] and not material_news:
         send_email(f"FPL GW{gw} recommendation withheld",f"# FPL Recommendation Withheld\n\n- AI override exceeded {cfg['ai_override_margin_points']} points without material news.");return 5
 
-    recomputed=plan_metrics(chosen["squad_ids"],proj_by_id,gw,cfg["projection_weights"],cfg["bench_weight"],chip=chosen.get("chip"))
+    recompute_mode="probabilistic" if chosen.get("optimizer_engine")=="V3_GW1_PROBABILISTIC_RERANK" else "robust"
+    recompute_bench=0.0 if recompute_mode=="probabilistic" else cfg["bench_weight"]
+    recomputed=plan_metrics(chosen["squad_ids"],proj_by_id,gw,cfg["projection_weights"],recompute_bench,chip=chosen.get("chip"),selection_mode=recompute_mode)
     errors=validate_plan(chosen,players_by_id,proj_by_id,state,gw,recomputed)
     if errors:
         send_email(f"FPL GW{gw} recommendation withheld","# FPL Recommendation Withheld\n\n"+"\n".join(f"- {e}" for e in errors));return 6
@@ -191,11 +210,12 @@ def main():
     else:
         decision["plan_separation_note"]=f"Optimizer separation between the top two plans: {sep:.2f} points."
     decision["news_status"]=news.get("status","OK")
-    body=render_report(gw,kind,delivery,state["mode"],chosen,decision,players_by_id,proj_by_id,base,chip_map,elite,news)
+    body=render_report(gw,kind,delivery,state["mode"],chosen,decision,players_by_id,proj_by_id,base,chip_map,elite,news,decision_audit=decision_audit)
     evidence={"generated_at":datetime.now(timezone.utc).isoformat(),"gameweek":gw,"state":state,"news":news,
       "sources":[{"url":x.get("source_url"),"title":x.get("source_title"),"timestamp":x.get("published_at"),"tier":x.get("source_tier"),"confidence":x.get("confidence"),"claim":x.get("claim")} for x in news.get("items",[])],
-      "external_stats_provider":external.get("provider"),"projection_model":{"type":"component model","weights":cfg["projection_weights"],"bench_weight":cfg["bench_weight"]},
-      "projections":projections,"multigw_shadow":multigw_shadow,"captaincy_shadow":captaincy_shadow,"elite":elite,"chip_opportunities":chip_map,"selected_plan":compact_plan(chosen),"warnings":payload["warnings"]}
+      "external_stats_provider":external.get("provider"),"projection_model":{"type":"component model","weights":cfg["projection_weights"],
+      "bench_valuation":"probabilistic auto-sub-aware" if state["mode"]=="gw1_initial_build" else f"legacy managed weight {cfg['bench_weight']}"},
+      "projections":projections,"multigw_shadow":multigw_shadow,"captaincy_shadow":captaincy_shadow,"decision_audit":decision_audit,"elite":elite,"chip_opportunities":chip_map,"selected_plan":compact_plan(chosen),"warnings":payload["warnings"]}
     attachments=[(f"fpl-gw{gw}-openai-prompt.txt",audit_text(payload),"text/plain"),
       (f"fpl-gw{gw}-evidence-pack.json",json.dumps(evidence,indent=2,default=str),"application/json"),
       (f"fpl-gw{gw}-optimizer-plans.csv",plans_csv(plans,players_by_id),"text/csv")]
