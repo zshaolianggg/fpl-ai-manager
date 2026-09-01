@@ -15,7 +15,7 @@ from .optimizer import initial_build_plans,managed_plans,plans_csv,plan_metrics
 from .multigw import ManagerState, plan_multigw
 from .captaincy import recommend_captaincy
 from .elite import discover,summarize
-from .chips import opportunity_map,augment_with_chip_plans
+from .chips import opportunity_map,augment_with_chip_plans,evaluate_wc_fh_shadow
 from .ai import decide,audit_text
 from .validator import validate_plan
 from .render import render_report
@@ -164,6 +164,27 @@ def main():
             state.setdefault("warnings",[]).append(f"V3 probabilistic captaincy shadow unavailable: {exc}")
     chip_map=opportunity_map(fixtures,teams,gw,cfg)
     plans=augment_with_chip_plans(plans,state,players,players_by_id,proj_by_id,gw,cfg,chip_map)
+    # WC/FH are intentionally shadow-only. Compare them with the best non-chip
+    # sequential path under a bounded runtime, but never add them to production
+    # optimizer_plans or allow the AI adjudicator to select them.
+    wc_fh_shadow={"status":"not_run","production_policy":"shadow_only"}
+    if state["mode"] != "gw1_initial_build" and cfg.get("chips",{}).get("wc_fh_shadow",{}).get("enabled",True):
+        current_ids={int(x["player_id"]) for x in state.get("squad",[])}
+        current_rows=[r for r in projections if r["player_id"] in current_ids]
+        chip_all_low=bool(current_rows) and all(r.get("confidence")=="LOW" for r in current_rows)
+        if budget.can_spend(70, reserve=180):
+            try:
+                with stage("wc_fh_shadow_comparison"):
+                    wc_fh_shadow=evaluate_wc_fh_shadow(
+                        state,players_by_id,projections,proj_by_id,gw,cfg,chip_map,
+                        news_status=news.get("status","OK"),all_low=chip_all_low,
+                    )
+            except Exception as exc:
+                wc_fh_shadow={"status":"unavailable","production_policy":"shadow_only","reason":str(exc)}
+                state.setdefault("warnings",[]).append(f"WC/FH shadow comparison unavailable: {exc}")
+        else:
+            wc_fh_shadow={"status":"skipped_runtime_guard","production_policy":"shadow_only"}
+    chip_map["wildcard_freehit_shadow"]=wc_fh_shadow
     public_gw=gw-1 if gw>1 else None
     if gw == 1:
         cache, warn_elite = {}, []
@@ -188,6 +209,7 @@ def main():
             "shadow_engine":None,
             "captaincy_shadow_status":"available" if captaincy_shadow else "unavailable",
             "agreement":"Legacy ILP is candidate generation only; final GW1 ranking is V3 probabilistic.",
+            "wc_fh_policy":"HOLD in GW1; WC/FH shadow-only thereafter until sequential validation.",
         }
     else:
         decision_audit={
@@ -195,6 +217,7 @@ def main():
             "shadow_engine":"V3 multi-GW planner" if multigw_shadow else None,
             "captaincy_shadow_status":"available" if captaincy_shadow else "unavailable",
             "agreement":"Not promoted: shadow outputs are evidence only.",
+            "wc_fh_policy":"Wildcard/Free Hit are shadow-only and cannot be selected by production.",
         }
     payload={"mode":state["mode"],"report_type":kind,"delivery_mode":delivery,"gameweek":gw,
       "objective":cfg["objective"],"risk_profile":cfg["risk_profile"],"state":state,
@@ -203,6 +226,7 @@ def main():
       "warnings":state.get("warnings",[])+warn_news+warn_stats+warn_elite,
       "policy":{"projection_weights":cfg["projection_weights"],
                 "bench_valuation":"probabilistic auto-sub-aware" if state["mode"]=="gw1_initial_build" else f"legacy managed weight {cfg['bench_weight']}",
+                "wildcard_freehit":"shadow_only; never selectable from optimizer_plans",
                 "ai_override_margin":cfg["ai_override_margin_points"],"alternative_margin":cfg["alternative_margin_points"]}}
     if not budget.can_spend(float(runtime_cfg.get("openai_decision_timeout_seconds",90)), reserve=60):
         state.setdefault("warnings",[]).append("Runtime budget low; using deterministic optimizer rank #1 without final AI tie-break.")
@@ -214,6 +238,10 @@ def main():
     if decision["plan_id"] not in lookup:
         send_email(f"FPL GW{gw} recommendation withheld","# FPL Recommendation Withheld\n\n- AI selected an unknown optimizer plan.");return 4
     chosen=lookup[decision["plan_id"]];top=plans[0]
+    if chosen.get("chip") not in {"wildcard","freehit"} and chip_map.get("wildcard_freehit_shadow"):
+        prefix="Wildcard and Free Hit are shadow-only in this build and were not eligible for production selection. "
+        if not str(decision.get("chip_reasoning","")).startswith(prefix):
+            decision["chip_reasoning"]=prefix+str(decision.get("chip_reasoning","")).strip()
     gap=top["optimizer_score"]-chosen["optimizer_score"]
     material_news=any(i.get("confidence") in {"HIGH","MEDIUM"} and i.get("status") in {"ruled_out","major_doubt","rotation_risk"} for i in news.get("items",[]))
     all_low=all(r.get("confidence")=="LOW" for r in projections if r["player_id"] in set(top["squad_ids"]))

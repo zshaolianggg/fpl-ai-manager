@@ -23,6 +23,8 @@ def render_report(gw,kind,delivery,mode,plan,decision,players,proj,base_plan=Non
             lines.append(f"- Probabilistic captaincy shadow: **{decision_audit['captaincy_shadow_status']}**")
         if decision_audit.get("agreement"):
             lines.append(f"- V2/V3 agreement: {decision_audit['agreement']}")
+        if decision_audit.get("wc_fh_policy"):
+            lines.append(f"- WC/FH authority: **{decision_audit['wc_fh_policy']}**")
     if mode=="gw1_initial_build":
         lines += ["","## Initial squad"]
         for pos in (1,2,3,4):
@@ -65,6 +67,25 @@ def render_report(gw,kind,delivery,mode,plan,decision,players,proj,base_plan=Non
     for i,pid in enumerate(lu["bench"],1): lines.append(f"{i}. {player_name(pid,players)}")
     lines += ["","## Captaincy",f"- Captain: **{player_name(lu['captain'],players)}**",f"- Vice-captain: **{player_name(lu['vice_captain'],players)}**"]
     lines += ["","## Chip decision",f"- **{plan.get('chip', '').upper() if plan.get('chip') else 'HOLD all chips'}**",f"- {decision['chip_reasoning']}"]
+    shadow=(chip_map or {}).get("wildcard_freehit_shadow") or {}
+    if shadow and shadow.get("status") not in {"disabled","not_run"}:
+        lines += ["", "## Wildcard / Free Hit shadow comparison"]
+        lines.append("- **Advisory only:** Wildcard and Free Hit cannot be activated by the production optimizer in this build.")
+        if shadow.get("baseline_non_chip_score") is not None:
+            lines.append(f"- Best non-chip sequential path score: **{shadow['baseline_non_chip_score']:.2f}** over the shadow horizon.")
+        for chip,label in (("wildcard","Wildcard"),("freehit","Free Hit")):
+            item=(shadow.get("chips") or {}).get(chip) or {}
+            if not item.get("available"):
+                lines.append(f"- {label}: unavailable.")
+            elif not item.get("evaluated"):
+                lines.append(f"- {label}: shadow evaluation unavailable ({item.get('reason','runtime/search limit')}).")
+            else:
+                gate="PASS" if item.get("confidence_gate_passed") else "FAIL"
+                lines.append(
+                    f"- {label}: gross edge vs best non-chip **{item.get('gross_advantage_vs_best_non_chip',0):+.2f}**, "
+                    f"preservation reserve **{item.get('preservation_reserve',0):.2f}**, "
+                    f"net edge **{item.get('net_opportunity_edge',0):+.2f}**; confidence/news gate **{gate}**. Shadow only."
+                )
     lines += ["","## Expected gain / projections"]
     if base_plan:
         gain=plan["metrics"]["weighted"]-base_plan["metrics"]["weighted"]-plan["hit_cost"]

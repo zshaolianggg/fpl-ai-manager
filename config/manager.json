@@ -106,7 +106,21 @@
     "future_opportunity_reserve_factor": 0.9,
     "minimum_opportunity_edge_points": 1.0,
     "confirmed_structure_reserve_points": 2.0,
-    "max_structure_reserve_points": 6.0
+    "max_structure_reserve_points": 6.0,
+    "production_wildcard_freehit": false,
+    "wc_fh_shadow": {
+      "enabled": true,
+      "planning_horizon": 3,
+      "candidate_per_position": 5,
+      "beam_width": 25,
+      "max_transfers_per_gw": 2,
+      "runtime_budget_seconds_per_run": 20,
+      "preservation_reserve_factor": 0.5,
+      "minimum_wildcard_preservation_points": 10.0,
+      "minimum_freehit_preservation_points": 8.0,
+      "minimum_net_edge_points": 4.0,
+      "low_confidence_edge_multiplier": 1.5
+    }
   },
   "state_file": ".state/manager_state.json",
   "elite_cache_file": ".state/elite_cohort.json",

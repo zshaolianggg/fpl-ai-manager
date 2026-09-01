@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from itertools import combinations
 from typing import Iterable
+from time import monotonic
 
 from .lineup import best_lineup
 from .validator import validate_squad
@@ -441,6 +442,8 @@ def plan_multigw(
     cache_enabled=True,
     include_chips=True,
     dominance_pruning=True,
+    force_first_chip=None,
+    runtime_budget_seconds=None,
 ):
     """Beam-search sequential FPL planner.
 
@@ -449,15 +452,23 @@ def plan_multigw(
     extra transfer creates a better later path; no fixed 'roll bonus' is added.
     """
     cache = PlannerCache() if cache_enabled else None
+    deadline = monotonic() + float(runtime_budget_seconds) if runtime_budget_seconds else None
     candidate_ids = structural_candidate_ids(
         projections, initial_state.squad, initial_state.gw,
         horizon=planning_horizon, per_position=candidate_per_position,
     )
     frontier = [Path(initial_state, 0.0, [])]
     dominance_removed = 0
+    timed_out = False
     for depth in range(planning_horizon):
+        if deadline is not None and monotonic() >= deadline:
+            timed_out = True
+            break
         expanded = []
         for path in frontier:
+            if deadline is not None and monotonic() >= deadline:
+                timed_out = True
+                break
             st = path.state
             actions = candidate_actions(
                 st, candidate_ids, players_by_id, proj_by_id,
@@ -465,7 +476,12 @@ def plan_multigw(
                 max_transfers=max_transfers_per_gw,
                 cache=cache, bench_weight=bench_weight, discount=discount, include_chips=include_chips,
             )
+            if depth == 0 and force_first_chip:
+                actions = [a for a in actions if isinstance(a, PlannerAction) and a.chip == force_first_chip]
             for action in actions:
+                if deadline is not None and monotonic() >= deadline:
+                    timed_out = True
+                    break
                 tr = transition(st, action, players_by_id, proj_by_id, bench_weight, cache=cache, discount=discount)
                 if tr is None:
                     continue
@@ -503,7 +519,7 @@ def plan_multigw(
     frontier.sort(key=lambda p: p.score, reverse=True)
     result = []
     diagnostics = cache.diagnostics() if cache is not None else {"cache_enabled": False}
-    diagnostics.update({"cache_enabled": bool(cache is not None), "candidate_count": len(candidate_ids), "terminal_frontier": len(frontier), "planning_horizon": planning_horizon, "dominance_pruned": dominance_removed, "chips_in_search": bool(include_chips)})
+    diagnostics.update({"cache_enabled": bool(cache is not None), "candidate_count": len(candidate_ids), "terminal_frontier": len(frontier), "planning_horizon": planning_horizon, "dominance_pruned": dominance_removed, "chips_in_search": bool(include_chips), "forced_first_chip": force_first_chip, "runtime_budget_seconds": runtime_budget_seconds, "timed_out": timed_out})
     for p in frontier[:top_n]:
         result.append({
             "score": round(p.score, 3),

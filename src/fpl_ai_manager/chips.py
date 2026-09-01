@@ -4,6 +4,93 @@ from collections import defaultdict
 from copy import deepcopy
 from .optimizer import _ilp_squads, plan_metrics, flexibility_adjustment, diversify, _pid
 from .lineup import best_lineup
+from .multigw import ManagerState, plan_multigw
+
+
+
+def wc_fh_production_enabled(cfg):
+    """Wildcard/Free Hit remain shadow-only until sequential backtesting promotes them."""
+    return bool(cfg.get("chips", {}).get("production_wildcard_freehit", False))
+
+
+def evaluate_wc_fh_shadow(state, players_by_id, projections, proj_by_id, next_gw, cfg, chip_map, *, news_status="OK", all_low=False):
+    """Compare WC/FH-now against the best non-chip sequential path.
+
+    This function is deliberately advisory: it never returns production plans.
+    Positive edges are reported for monitoring only until historical/live shadow
+    validation is strong enough to promote chip actions.
+    """
+    settings = cfg.get("chips", {}).get("wc_fh_shadow", {})
+    if next_gw == 1 or not settings.get("enabled", True):
+        return {"status": "disabled", "production_policy": "shadow_only"}
+    if state.get("mode") == "gw1_initial_build":
+        return {"status": "disabled", "production_policy": "shadow_only"}
+
+    mg = cfg.get("multigw", {})
+    horizon = int(settings.get("planning_horizon", 3))
+    common = dict(
+        planning_horizon=horizon,
+        candidate_per_position=int(settings.get("candidate_per_position", 5)),
+        beam_width=int(settings.get("beam_width", 25)),
+        max_transfers_per_gw=int(settings.get("max_transfers_per_gw", 2)),
+        bench_weight=float(cfg.get("bench_weight", .2)),
+        discount=float(mg.get("discount", .97)),
+        top_n=1, cache_enabled=True, dominance_pruning=True,
+        runtime_budget_seconds=float(settings.get("runtime_budget_seconds_per_run", 20)),
+    )
+    initial = ManagerState.from_public_state(state, next_gw)
+    baseline = plan_multigw(initial, players_by_id, projections, proj_by_id, include_chips=False, **common)
+    if not baseline:
+        return {"status": "unavailable", "production_policy": "shadow_only", "reason": "No non-chip sequential baseline path."}
+    baseline_score = float(baseline[0]["score"])
+    thresholds = chip_map.get("thresholds", {})
+    reserve_factor = float(settings.get("preservation_reserve_factor", .5))
+    min_net = float(settings.get("minimum_net_edge_points", 4.0))
+    low_mult = float(settings.get("low_confidence_edge_multiplier", 1.5))
+    degraded = str(news_status).upper() == "DEGRADED"
+    forced = sum(float(proj_by_id[x["player_id"]].get("expected_minutes", 90)) < 45 for x in state.get("squad", []))
+
+    result = {
+        "status": "available", "production_policy": "shadow_only",
+        "baseline_non_chip_score": round(baseline_score, 3),
+        "planning_horizon": horizon, "all_low_confidence": bool(all_low),
+        "news_status": news_status, "forced_low_minutes_players": forced,
+        "chips": {},
+    }
+    avail = state.get("chips_available", {})
+    for chip, avail_key, threshold_key in (("wildcard", "wildcard", "wildcard"), ("freehit", "freehit", "freehit")):
+        if not avail.get(avail_key):
+            result["chips"][chip] = {"available": False}
+            continue
+        paths = plan_multigw(initial, players_by_id, projections, proj_by_id, include_chips=True, force_first_chip=chip, **common)
+        if not paths:
+            result["chips"][chip] = {"available": True, "evaluated": False, "reason": "No legal forced-chip shadow path found within budget."}
+            continue
+        chip_score = float(paths[0]["score"])
+        gross = chip_score - baseline_score
+        hurdle = float(thresholds.get(threshold_key, 0.0))
+        min_reserve = float(settings.get(f"minimum_{chip}_preservation_points", 10.0 if chip == "wildcard" else 8.0))
+        preserve = max(min_reserve, reserve_factor * hurdle)
+        net = gross - preserve
+        required = min_net * (low_mult if all_low else 1.0)
+        # Degraded news blocks promotion unless the permanent squad has a genuine
+        # emergency (two or more sub-45 expected-minute players). Production is
+        # still shadow-only regardless of this flag.
+        confidence_gate = (not all_low) and (not degraded or forced >= 2)
+        promotion_eligible = confidence_gate and net >= required
+        result["chips"][chip] = {
+            "available": True, "evaluated": True,
+            "chip_path_score": round(chip_score, 3),
+            "gross_advantage_vs_best_non_chip": round(gross, 3),
+            "preservation_reserve": round(preserve, 3),
+            "net_opportunity_edge": round(net, 3),
+            "minimum_required_edge": round(required, 3),
+            "confidence_gate_passed": confidence_gate,
+            "promotion_eligible_shadow_only": promotion_eligible,
+            "first_action": paths[0].get("first_action"),
+            "planner_diagnostics": paths[0].get("planner_diagnostics"),
+        }
+    return result
 
 def _adaptive(early,late,gw):
     start=1 if gw<=19 else 20; end=19 if gw<=19 else 38
@@ -127,6 +214,16 @@ def augment_with_chip_plans(plans,state,players,players_by_id,proj_by_id,next_gw
         p["optimizer_score"]=round(best["optimizer_score"]+tc_opp["net"],2)
         p["reason_flags"]=p.get("reason_flags",[])+[f"Triple Captain net opportunity edge {tc_opp['net']:.1f} (now {tc_opp['current']:.1f} vs reserved future {tc_opp['opportunity_cost']:.1f})"]
         p["plan_id"]=_pid(p); out.append(p)
+    # Wildcard and Free Hit are deliberately excluded from the production plan
+    # list. They are evaluated separately against the best non-chip sequential
+    # path and surfaced as shadow evidence only.
+    if not wc_fh_production_enabled(cfg):
+        chip_map["wc_fh_policy"] = {
+            "production": "shadow_only",
+            "reason": "WC/FH require sequential non-chip comparison and validation before promotion."
+        }
+        out.sort(key=lambda p:p["optimizer_score"],reverse=True)
+        return diversify(out,cfg["optimizer"]["top_plans"])
     budget=(int(state.get("bank",0))+sum(int(x["selling_price"]) for x in state.get("squad",[]))) if state.get("squad") else 1000
     # Free Hit: legal one-week optimized squad; require material modeled one-week gain and preferably a confirmed blank/double.
     if avail.get("freehit"):

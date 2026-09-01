@@ -1,4 +1,9 @@
 
+
+## Alpha 4 post4 chip safety
+
+Wildcard and Free Hit are **shadow-only** in production. The manager compares each against the best bounded non-chip multi-GW path, applies an explicit preservation reserve and confidence/news gates, and reports the comparison for monitoring. WC/FH cannot be selected by the production optimizer or final AI adjudicator until promoted in a later validated build.
+
 # FPL AI Manager v2
 
 A safety-first, evidence-driven automated FPL manager for team **6000549**.
