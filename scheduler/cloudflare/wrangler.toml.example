@@ -1,0 +1,12 @@
+name = "fpl-ai-manager-scheduler"
+main = "worker.js"
+compatibility_date = "2026-08-01"
+
+[triggers]
+crons = ["17 * * * *"]
+
+[vars]
+GITHUB_OWNER = "YOUR_GITHUB_OWNER"
+GITHUB_REPO = "YOUR_REPOSITORY"
+GITHUB_REF = "main"
+GITHUB_WORKFLOW = "fpl-manager.yml"

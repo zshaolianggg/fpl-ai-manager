@@ -1,7 +1,8 @@
-
 name: FPL AI Manager
 
 on:
+  # GitHub's scheduler is retained as a backup. The primary clock can be an
+  # external scheduler that invokes workflow_dispatch (see scheduler/cloudflare).
   schedule:
     - cron: "17 * * * *"
   workflow_dispatch:
@@ -11,9 +12,18 @@ on:
         required: false
         type: choice
         options: ["", "preview", "final"]
+      trigger_source:
+        description: "Optional trigger label (external/manual)"
+        required: false
+        type: string
+        default: "manual"
 
 permissions:
   contents: read
+
+concurrency:
+  group: fpl-ai-manager
+  cancel-in-progress: false
 
 env:
   FPL_TEAM_ID: "6000549"
@@ -26,6 +36,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
+      - name: Scheduler diagnostics
+        shell: bash
+        run: |
+          echo "utc_now=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          echo "event_name=${{ github.event_name }}"
+          echo "run_id=${{ github.run_id }}"
+          echo "run_attempt=${{ github.run_attempt }}"
+          echo "actor=${{ github.actor }}"
+          echo "trigger_source=${{ inputs.trigger_source || github.event_name }}"
+          echo "force_report=${{ inputs.force_report }}"
+
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
@@ -46,6 +67,14 @@ jobs:
       - name: Check whether a report is due
         id: preflight
         run: python -m fpl_ai_manager.preflight
+
+      - name: Preflight diagnostics
+        shell: bash
+        run: |
+          echo "due=${{ steps.preflight.outputs.due }}"
+          echo "report_type=${{ steps.preflight.outputs.report_type }}"
+          echo "gw=${{ steps.preflight.outputs.gw }}"
+          echo "delivery_mode=${{ steps.preflight.outputs.delivery_mode }}"
 
       - name: Generate and email recommendation
         if: steps.preflight.outputs.due == 'true'

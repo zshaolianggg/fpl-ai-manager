@@ -47,11 +47,11 @@ The historic cohort retains the remainder.
 
 ## Safety behavior
 
-If the engine cannot verify canonical squad state, bank, free transfers, selling values, legality, affordability, captain/vice, or the selected optimizer plan, it sends **Recommendation withheld / manual check required** instead of a plausible guess.
+If the engine cannot verify canonical squad state, bank, free transfers, legality, affordability, captain/vice, or the selected optimizer plan, it sends **Recommendation withheld / manual check required** instead of a plausible guess. Public picks do not normally include private purchase/selling-price fields, so managed-squad runs reconstruct the purchase basis from permanent transfer-in costs or the player's season-start price before applying the FPL selling-price rule.
 
 ## Timing
 
-GitHub Actions wakes hourly at minute 17 UTC. Python decides whether a report is due.
+The workflow supports an hourly external `workflow_dispatch` heartbeat as the preferred scheduler, while native GitHub Actions cron at minute 17 UTC remains enabled as a backup. Python still decides whether a report is due, so duplicate scheduler wakes do not create duplicate production reports. A ready-to-deploy Cloudflare Cron worker is included in `scheduler/cloudflare/`.
 
 - Preview: ~24h before deadline
 - Final: ~2–3.5h before deadline
@@ -121,7 +121,7 @@ From GW2 onward, player-history enrichment is capped to a compact candidate set,
 
 ## Decision-model guardrails added after GW1 audit
 
-- GW1 squad construction optimizes the actual starting XI + captain, with the bench valued at 20% from the start.
+- GW1 legal candidate squads are generated broadly, then reranked by the V3 probabilistic/structural layer using starting-XI value, auto-sub-aware bench value, captaincy, multi-GW utility, and dormant-capital diagnostics.
 - LOW-confidence projections are discounted in optimizer ranking; displayed projections remain the raw point estimates.
 - Goalkeepers/defenders are not allowed to become balanced-risk captains from a small noisy projection edge.
 - All GW1 chips are held by policy; future chip plans are scored on net advantage over an opportunity-cost threshold rather than raw chip-added points.
