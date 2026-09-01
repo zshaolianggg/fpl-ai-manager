@@ -29,12 +29,12 @@ If all relevant projections are LOW confidence and there is no material HIGH/MED
 Treat source hierarchy as official > reputable > specialist. Missing news lowers confidence but is not negative evidence.
 Never describe a shadow model as the model that selected the production plan. If optimizer_engine or decision_audit is supplied, name the production engine accurately. Do not mention a fixed 20% bench weighting for a V3 GW1 plan; V3 GW1 uses probabilistic auto-sub-aware bench valuation. If the selected squad has structural_diagnostics, explicitly flag unusual expensive deep-bench capital rather than rationalizing it."""
 
-def decide(payload,model=None):
+def decide(payload,model=None,timeout=90.0):
     client=OpenAI(api_key=os.environ["OPENAI_API_KEY"])
     model=model or os.getenv("OPENAI_MODEL","gpt-5")
     resp=client.responses.create(model=model,instructions=SYSTEM,
                                  input=json.dumps(payload,separators=(",",":"),default=str),
-                                 text={"format":DECISION_SCHEMA})
+                                 text={"format":DECISION_SCHEMA}, timeout=float(timeout))
     return json.loads(resp.output_text), resp
 
 def audit_text(payload,model=None):

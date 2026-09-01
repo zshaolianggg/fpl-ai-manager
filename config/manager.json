@@ -35,10 +35,13 @@
   },
   "optimizer": {
     "top_plans": 20,
-    "beam_width": 120,
-    "candidate_per_position": 22,
-    "max_transfers_considered": 4,
-    "near_tie_cluster_width_points": 0.5
+    "beam_width": 45,
+    "candidate_per_position": 14,
+    "max_transfers_considered": 3,
+    "near_tie_cluster_width_points": 0.5,
+    "incoming_per_out": 10,
+    "max_evaluations_per_depth": 3000,
+    "runtime_budget_seconds": 180
   },
   "elite": {
     "enabled": true,
@@ -150,5 +153,16 @@
     "include_chips": true,
     "dominance_pruning": true,
     "price_paths_enabled": true
+  },
+  "runtime": {
+    "total_budget_seconds": 900,
+    "candidate_summary_players": 45,
+    "candidate_summary_budget_seconds": 60,
+    "bulk_fpl_timeout_seconds": 6,
+    "bulk_fpl_retries": 1,
+    "bulk_fpl_workers": 10,
+    "elite_discovery_budget_seconds": 75,
+    "elite_signal_budget_seconds": 60,
+    "openai_decision_timeout_seconds": 90
   }
 }

@@ -2,7 +2,8 @@
 from __future__ import annotations
 from pathlib import Path
 from datetime import datetime, timezone
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
+from time import monotonic
 import json, os
 from .fpl import FPLClient,next_event
 from .state import load_public_state
@@ -22,6 +23,7 @@ from .emailer import send_email
 from .schedule import classify_window
 from .confidence import recommendation_confidence
 from .report_state import load as load_report_state,gw_state,mark_sent,mark_late_checked
+from .runtime import RuntimeBudget, stage
 
 ROOT=Path(__file__).resolve().parents[2]
 def load_cfg():return json.loads((ROOT/"config/manager.json").read_text())
@@ -30,19 +32,36 @@ def compact_plan(p, rank=None):
     if rank is not None: out["optimizer_rank"]=rank
     return out
 
-def summaries_for_candidates(client,players,state):
+def summaries_for_candidates(client,players,state,runtime_cfg=None):
+    runtime_cfg=runtime_cfg or {}
     owned={int(x["player_id"]) for x in state.get("squad",[])}
     scored=[]
     for p in players:
         score=float(p.get("ep_next") or 0)*3+float(p.get("selected_by_percent") or 0)*.05+float(p.get("total_points") or 0)*.02+(1000 if int(p["id"]) in owned else 0)
         scored.append((score,int(p["id"])))
-    ids=[pid for _,pid in sorted(scored,reverse=True)[:55]]
+    cap=int(runtime_cfg.get("candidate_summary_players",45))
+    ids=[pid for _,pid in sorted(scored,reverse=True)[:cap]]
     out={}
-    with ThreadPoolExecutor(max_workers=12) as ex:
-        fut={ex.submit(lambda x: FPLClient().element_summary(x),pid):pid for pid in ids}
-        for f in as_completed(fut):
+    timeout=float(runtime_cfg.get("bulk_fpl_timeout_seconds",6))
+    retries=int(runtime_cfg.get("bulk_fpl_retries",1))
+    budget=float(runtime_cfg.get("candidate_summary_budget_seconds",75))
+    ex=ThreadPoolExecutor(max_workers=int(runtime_cfg.get("bulk_fpl_workers",10)))
+    fut={ex.submit(lambda x: FPLClient(timeout=timeout,retries=retries).element_summary(x),pid):pid for pid in ids}
+    pending=set(fut); deadline=monotonic()+budget
+    try:
+        while pending:
+            remaining=deadline-monotonic()
+            if remaining<=0:break
+            try:f=next(as_completed(pending,timeout=remaining))
+            except TimeoutError:break
+            pending.remove(f)
             try:out[fut[f]]=f.result()
             except Exception:pass
+        for f in pending:f.cancel()
+    finally:
+        ex.shutdown(wait=False,cancel_futures=True)
+    if pending:
+        print(f"::warning::Candidate summary budget exhausted after {budget:.0f}s; continuing with {len(out)}/{len(ids)} summaries.",flush=True)
     return out
 
 def due_info(cfg,nxt):
@@ -70,36 +89,44 @@ def late_check(cfg,gw,client,players_by_id):
     mark_late_checked(gw);return 0
 
 def main():
-    cfg=load_cfg();team_id=int(os.getenv("FPL_TEAM_ID",cfg["team_id"]));client=FPLClient()
-    boot=client.bootstrap();fixtures=client.fixtures();nxt=next_event(boot["events"])
+    cfg=load_cfg(); runtime_cfg=cfg.get("runtime",{}); budget=RuntimeBudget(runtime_cfg.get("total_budget_seconds",1080))
+    team_id=int(os.getenv("FPL_TEAM_ID",cfg["team_id"]));client=FPLClient()
+    with stage("bootstrap_and_fixtures"):
+        boot=client.bootstrap();fixtures=client.fixtures();nxt=next_event(boot["events"])
     if not nxt:return 0
     gw=int(nxt["id"]);kind,delivery=due_info(cfg,nxt)
     if not kind:return 0
     players=boot["elements"];players_by_id={int(p["id"]):p for p in players};teams={int(t["id"]):t["name"] for t in boot["teams"]}
     if kind=="late_check":return late_check(cfg,gw,client,players_by_id)
 
-    state=load_public_state(client,team_id,gw,players_by_id)
+    with stage("public_state"):
+        state=load_public_state(client,team_id,gw,players_by_id)
     if not state.get("actionable"):
         send_email(f"FPL GW{gw} recommendation withheld","# FPL Recommendation Withheld\n\n## Manual check required\n"+"\n".join(f"- {x}" for x in state.get("warnings",[])))
         return 2
 
-    summaries={} if gw == 1 else summaries_for_candidates(client,players,state)
+    with stage("candidate_summaries"):
+        summaries={} if gw == 1 else summaries_for_candidates(client,players,state,runtime_cfg)
     owned={int(x["player_id"]) for x in state.get("squad",[])}
     ranked=sorted(players,key=lambda p:(int(p["id"]) in owned,float(p.get("ep_next") or 0),float(p.get("selected_by_percent") or 0)),reverse=True)
     news_names=[p["web_name"] for p in ranked[:cfg["news"]["max_players"]]]
     rs=gw_state(load_report_state(),gw)
     fresh_after=rs.get("preview_sent_at") if kind=="final" else None
-    news,warn_news=research_news(news_names,cfg["news"]["allowed_domains"],os.getenv("OPENAI_MODEL","gpt-5"),kind,fresh_after) if cfg["news"]["enabled"] else ({"items":[],"freshness_note":"disabled"},[])
+    with stage("news_research"):
+        news,warn_news=research_news(news_names,cfg["news"]["allowed_domains"],os.getenv("OPENAI_MODEL","gpt-5"),kind,fresh_after) if cfg["news"]["enabled"] else ({"items":[],"freshness_note":"disabled"},[])
     nidx=news_by_player(news)
 
-    external,warn_stats=load_external_stats({**cfg["stats"],"cache_dir":cfg["stats_cache_dir"]},season_start_year(cfg.get("season", "2026/27")))
-    projections=build_projections(players,teams,fixtures,gw,summaries,external,nidx,cfg["projection_horizon_gws"],team_rows=boot.get("teams",[]),season=cfg.get("season","2026/27"))
+    with stage("external_stats"):
+        external,warn_stats=load_external_stats({**cfg["stats"],"cache_dir":cfg["stats_cache_dir"]},season_start_year(cfg.get("season", "2026/27")))
+    with stage("projections"):
+        projections=build_projections(players,teams,fixtures,gw,summaries,external,nidx,cfg["projection_horizon_gws"],team_rows=boot.get("teams",[]),season=cfg.get("season","2026/27"))
     proj_by_id={r["player_id"]:r for r in projections}
     multigw_shadow=[]
-    if state["mode"]=="gw1_initial_build":
-        plans=initial_build_plans(players,players_by_id,proj_by_id,gw,cfg);base=None
-    else:
-        plans,base=managed_plans(state,players_by_id,projections,proj_by_id,gw,cfg)
+    with stage("optimizer"):
+        if state["mode"]=="gw1_initial_build":
+            plans=initial_build_plans(players,players_by_id,proj_by_id,gw,cfg);base=None
+        else:
+            plans,base=managed_plans(state,players_by_id,projections,proj_by_id,gw,cfg)
         mg_cfg=cfg.get("multigw",{})
         if mg_cfg.get("enabled"):
             try:
@@ -146,8 +173,10 @@ def main():
             "weight_current": 0.0
         }
     elif cfg["elite"]["enabled"]:
-        cache,warn_elite=discover(client,cfg["elite"],gw,cfg["elite_cache_file"])
-        elite=summarize(client,cache,public_gw,players_by_id,gw)
+        with stage("elite_discovery"):
+            cache,warn_elite=discover(client,cfg["elite"],gw,cfg["elite_cache_file"],runtime_cfg)
+        with stage("elite_signal"):
+            elite=summarize(client,cache,public_gw,players_by_id,gw,runtime_cfg)
     else:
         cache,warn_elite={},[]
         elite={"status":"disabled"}
@@ -175,7 +204,12 @@ def main():
       "policy":{"projection_weights":cfg["projection_weights"],
                 "bench_valuation":"probabilistic auto-sub-aware" if state["mode"]=="gw1_initial_build" else f"legacy managed weight {cfg['bench_weight']}",
                 "ai_override_margin":cfg["ai_override_margin_points"],"alternative_margin":cfg["alternative_margin_points"]}}
-    decision,_=decide(payload,os.getenv("OPENAI_MODEL","gpt-5"))
+    if not budget.can_spend(float(runtime_cfg.get("openai_decision_timeout_seconds",90)), reserve=60):
+        state.setdefault("warnings",[]).append("Runtime budget low; using deterministic optimizer rank #1 without final AI tie-break.")
+        decision={"plan_id":plans[0]["plan_id"],"alternative_plan_id":plans[1]["plan_id"] if len(plans)>1 else None,"confidence":"LOW","executive_reasoning":"Runtime budget guard activated; deterministic optimizer rank #1 selected.","elite_signal":"Runtime guard; elite remains secondary.","chip_reasoning":"Deterministic chip plan retained.","news_summary":[],"risks":["Optional AI adjudication skipped to guarantee delivery before workflow timeout."]}
+    else:
+        with stage("openai_adjudication"):
+            decision,_=decide(payload,os.getenv("OPENAI_MODEL","gpt-5"),timeout=runtime_cfg.get("openai_decision_timeout_seconds",90))
     lookup={p["plan_id"]:p for p in plans}
     if decision["plan_id"] not in lookup:
         send_email(f"FPL GW{gw} recommendation withheld","# FPL Recommendation Withheld\n\n- AI selected an unknown optimizer plan.");return 4

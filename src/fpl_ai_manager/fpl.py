@@ -18,14 +18,16 @@ def next_event(events, now=None):
     return min(future, key=lambda e: parse_deadline(e["deadline_time"])) if future else None
 
 class FPLClient:
-    def __init__(self, timeout=20):
+    def __init__(self, timeout=20, retries=3):
         self.timeout = timeout
+        self.retries = int(retries)
         self.s = requests.Session()
         self.s.headers.update({"User-Agent": "fpl-ai-manager/2.0"})
 
-    def _get(self, path, retries=3):
+    def _get(self, path, retries=None):
         url = f"{BASE}/{path.lstrip('/')}"
         last = None
+        retries = self.retries if retries is None else int(retries)
         for attempt in range(retries):
             try:
                 r = self.s.get(url, timeout=self.timeout)

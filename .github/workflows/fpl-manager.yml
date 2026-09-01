@@ -78,6 +78,7 @@ jobs:
 
       - name: Generate and email recommendation
         if: steps.preflight.outputs.due == 'true'
+        timeout-minutes: 20
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}

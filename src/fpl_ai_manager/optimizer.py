@@ -1,5 +1,6 @@
 
 from __future__ import annotations
+from time import monotonic
 from dataclasses import dataclass
 from itertools import combinations
 from collections import Counter
@@ -311,6 +312,12 @@ def _candidate_ids(projections,current_ids,cfg):
 
 def managed_plans(state, players_by_id, projections, proj_by_id, next_gw, cfg):
     weights=cfg["projection_weights"]; bench=cfg["bench_weight"]; ft=int(state["free_transfers"])
+    opt_cfg=cfg.get("optimizer",{})
+    runtime_budget=float(opt_cfg.get("runtime_budget_seconds",180))
+    max_eval_depth=int(opt_cfg.get("max_evaluations_per_depth",3000))
+    started=monotonic()
+    def budget_exhausted(): return monotonic()-started >= runtime_budget
+
     current=[int(x["player_id"]) for x in state["squad"]]
     sell={int(x["player_id"]):int(x["selling_price"]) for x in state["squad"]}
     candidates=_candidate_ids(projections,set(current),cfg)
@@ -322,46 +329,59 @@ def managed_plans(state, players_by_id, projections, proj_by_id, next_gw, cfg):
           "reason_flags":["ROLL"]}
     base["plan_id"]=_pid(base)
     frontier=[base]; all_plans=[base]
-    max_t=min(cfg["optimizer"]["max_transfers_considered"],ft+2)
+    max_t=min(opt_cfg["max_transfers_considered"],ft+2)
+    evaluated_total=0
     for depth in range(1,max_t+1):
-        expanded=[]
+        if budget_exhausted():
+            print(f"::warning::Managed optimizer runtime budget {runtime_budget:.0f}s reached before transfer depth {depth}; returning best plans evaluated so far.",flush=True)
+            break
+        expanded=[]; evaluated_depth=0
         for parent in frontier:
+            if budget_exhausted() or evaluated_depth>=max_eval_depth: break
             used_out={t["out"] for t in parent["transfers"]}
             owned=set(parent["squad_ids"])
+            # Cheap pre-ranking: only inspect the strongest same-position replacements
+            # for each outgoing player before paying for a full multi-GW lineup recompute.
             for out in [p for p in current if p not in used_out]:
+                if budget_exhausted() or evaluated_depth>=max_eval_depth: break
                 pos=proj_by_id[out]["position"]
-                for inn in candidates:
-                    if inn in owned or proj_by_id[inn]["position"]!=pos: continue
+                incoming=[inn for inn in candidates if inn not in owned and proj_by_id[inn]["position"]==pos]
+                incoming.sort(key=lambda inn:(proj_by_id[inn]["gw6"]-proj_by_id[out]["gw6"],proj_by_id[inn]["gw3"]-proj_by_id[out]["gw3"],proj_by_id[inn]["gw1"]-proj_by_id[out]["gw1"]),reverse=True)
+                per_out=int(opt_cfg.get("incoming_per_out",10))
+                for inn in incoming[:per_out]:
+                    if budget_exhausted() or evaluated_depth>=max_eval_depth: break
                     bank=parent["bank_after"]+sell[out]-proj_by_id[inn]["price"]
                     if bank<0: continue
                     squad=[p for p in parent["squad_ids"] if p!=out]+[inn]
                     if not legal_after_transfer(squad,players_by_id): continue
                     transfers=parent["transfers"]+[{"out":out,"in":inn,"sell":sell[out],"buy":proj_by_id[inn]["price"]}]
-                    met=plan_metrics(squad,proj_by_id,next_gw,weights,bench)
+                    met=plan_metrics(squad,proj_by_id,next_gw,weights,bench); evaluated_depth+=1; evaluated_total+=1
                     gross=met["weighted"]-base_met["weighted"]
                     hit=max(0,depth-ft)*4
-                    structural=(proj_by_id[out]["expected_minutes"]<45 or met["gw6"]-base_met["gw6"]>=8 or
-                                met["lineups"][next_gw]["score"]-base_met["lineups"][next_gw]["score"]>=2)
+                    structural=(proj_by_id[out]["expected_minutes"]<45 or met["gw6"]-base_met["gw6"]>=8 or met["lineups"][next_gw]["score"]-base_met["lineups"][next_gw]["score"]>=2)
                     if hit==4 and not (gross>=cfg["hit_rules"]["minus4_min_gross_gain"] and structural): continue
                     if hit>=8 and not (gross>=cfg["hit_rules"]["minus8_min_gross_gain"] and structural): continue
                     flex=flexibility_adjustment(squad,proj_by_id,bank,cfg["flexibility_cap_points"])
                     robust=weights["gw1"]*met["lineups"][next_gw]["robust_score"]+weights["gw3"]*sum(met["lineups"][next_gw+i]["robust_score"] for i in range(3))+weights["gw6"]*sum(met["lineups"][next_gw+i]["robust_score"] for i in range(6))
                     score=robust-hit+flex
-                    p={"transfers":transfers,"squad_ids":squad,"bank_after":bank,"hit_cost":hit,"chip":None,
-                       "metrics":met,"flexibility_adjustment":flex,"optimizer_score":round(score,2),
-                       "lineup":met["lineups"][next_gw],"reason_flags":["structural" if structural else "points"]}
-                    p["plan_id"]=_pid(p)
-                    expanded.append(p)
+                    row={"transfers":transfers,"squad_ids":squad,"bank_after":bank,"hit_cost":hit,"chip":None,
+                         "metrics":met,"flexibility_adjustment":flex,"optimizer_score":round(score,2),
+                         "lineup":met["lineups"][next_gw],"reason_flags":["structural" if structural else "points"]}
+                    row["plan_id"]=_pid(row); expanded.append(row)
+        if evaluated_depth>=max_eval_depth:
+            print(f"::warning::Managed optimizer capped depth {depth} at {max_eval_depth} full plan evaluations.",flush=True)
         expanded.sort(key=lambda p:p["optimizer_score"],reverse=True)
         dedup={}
-        for p in expanded:
-            key=tuple(sorted(p["squad_ids"]))
-            dedup.setdefault(key,p)
-        frontier=list(dedup.values())[:cfg["optimizer"]["beam_width"]]
+        for row in expanded:
+            key=tuple(sorted(row["squad_ids"]))
+            dedup.setdefault(key,row)
+        frontier=list(dedup.values())[:opt_cfg["beam_width"]]
         all_plans += frontier
+        if not frontier: break
+    print(f"::notice::Managed optimizer evaluated {evaluated_total} transfer states in {monotonic()-started:.2f}s.",flush=True)
     all_plans.sort(key=lambda p:p["optimizer_score"],reverse=True)
     all_plans=cluster_sort(all_plans,proj_by_id,0.50)
-    return diversify(all_plans,cfg["optimizer"]["top_plans"]), base
+    return diversify(all_plans,opt_cfg["top_plans"]), base
 
 def plans_csv(plans, players_by_id):
     buf=io.StringIO()
