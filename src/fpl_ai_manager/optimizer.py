@@ -282,15 +282,34 @@ def robustness_tiebreak(plan, proj_by_id):
     cap_quality=(1 if cap_row["position"] in {3,4} else 0)+(1 if cap_row.get("expected_minutes",0)>=75 else 0)
     return round(0.35*cap_quality - 0.08*low_minutes - 0.03*low_conf - 0.25*expensive_bench,3)
 
+def equivalence_tiebreak(plan, proj_by_id):
+    """Secondary utility used only inside a near-tie equivalence band.
+
+    Tiny model-score differences should not masquerade as precision. Within the
+    configured band, prefer robust minutes/captaincy, usable cash, and avoiding
+    hits. Raw optimizer score remains the primary ordering outside the band.
+    """
+    robust = robustness_tiebreak(plan, proj_by_id)
+    bank = min(40, max(0, int(plan.get("bank_after", 0)))) / 10.0
+    hit = float(plan.get("hit_cost", 0))
+    transfer_count = len(plan.get("transfers") or [])
+    return round(robust + 0.10*bank - 0.12*hit - 0.03*max(0, transfer_count-1), 3)
+
+
 def cluster_sort(plans, proj_by_id, cluster_width=.50):
     if not plans:return plans
     plans=sorted(plans,key=lambda p:p["optimizer_score"],reverse=True)
-    top=plans[0]["optimizer_score"]
-    cluster=[p for p in plans if top-p["optimizer_score"]<=cluster_width]
-    rest=[p for p in plans if top-p["optimizer_score"]>cluster_width]
+    numerical_top=plans[0]["optimizer_score"]
+    cluster=[p for p in plans if numerical_top-p["optimizer_score"]<=cluster_width]
+    rest=[p for p in plans if numerical_top-p["optimizer_score"]>cluster_width]
     for p in cluster:
         p["robustness_tiebreak"]=robustness_tiebreak(p,proj_by_id)
-    cluster.sort(key=lambda p:(p["robustness_tiebreak"],p["optimizer_score"]),reverse=True)
+        p["equivalence_tiebreak"]=equivalence_tiebreak(p,proj_by_id)
+        p["within_equivalence_band"]=True
+        p["numerical_gap_to_top"]=round(numerical_top-p["optimizer_score"],3)
+    cluster.sort(key=lambda p:(p["equivalence_tiebreak"],p["optimizer_score"]),reverse=True)
+    if cluster:
+        cluster[0]["equivalence_band_winner"]=True
     return cluster+rest
 
 def diversify(plans,n):
@@ -380,7 +399,7 @@ def managed_plans(state, players_by_id, projections, proj_by_id, next_gw, cfg):
         if not frontier: break
     print(f"::notice::Managed optimizer evaluated {evaluated_total} transfer states in {monotonic()-started:.2f}s.",flush=True)
     all_plans.sort(key=lambda p:p["optimizer_score"],reverse=True)
-    all_plans=cluster_sort(all_plans,proj_by_id,0.50)
+    all_plans=cluster_sort(all_plans,proj_by_id,float(opt_cfg.get("near_tie_cluster_width_points",.75)))
     return diversify(all_plans,opt_cfg["top_plans"]), base
 
 def plans_csv(plans, players_by_id):

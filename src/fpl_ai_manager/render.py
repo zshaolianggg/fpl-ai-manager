@@ -25,6 +25,13 @@ def render_report(gw,kind,delivery,mode,plan,decision,players,proj,base_plan=Non
             lines.append(f"- V2/V3 agreement: {decision_audit['agreement']}")
         if decision_audit.get("wc_fh_policy"):
             lines.append(f"- WC/FH authority: **{decision_audit['wc_fh_policy']}**")
+        comp=decision_audit.get("v2_v3_comparison") or {}
+        if comp.get("status")=="available":
+            v2_action="ROLL" if comp.get("v2_roll") else f"{len(comp.get('v2_transfers',[]))} transfer(s)"
+            v3_action="ROLL" if comp.get("v3_roll") else f"{len(comp.get('v3_transfers',[]))} transfer(s)"
+            lines.append(f"- V2 first action: **{v2_action}**; V3 shadow first action: **{v3_action}**; comparison: **{comp.get('label')}**.")
+        if decision_audit.get("equivalence_band_points") is not None:
+            lines.append(f"- Near-tie policy: plans within **{float(decision_audit['equivalence_band_points']):.2f} pts** are treated as equivalent and resolved by robustness/flexibility rather than decimal score precision.")
     if mode=="gw1_initial_build":
         lines += ["","## Initial squad"]
         for pos in (1,2,3,4):

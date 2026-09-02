@@ -24,6 +24,8 @@ from .schedule import classify_window
 from .confidence import recommendation_confidence
 from .report_state import load as load_report_state,gw_state,mark_sent,mark_late_checked
 from .runtime import RuntimeBudget, stage
+from .decision_compare import compare_v2_v3
+from .backtest.snapshots import write_snapshot
 
 ROOT=Path(__file__).resolve().parents[2]
 def load_cfg():return json.loads((ROOT/"config/manager.json").read_text())
@@ -128,7 +130,7 @@ def main():
         else:
             plans,base=managed_plans(state,players_by_id,projections,proj_by_id,gw,cfg)
         mg_cfg=cfg.get("multigw",{})
-        if mg_cfg.get("enabled"):
+        if mg_cfg.get("enabled") or mg_cfg.get("shadow_mode"):
             try:
                 mg_state=ManagerState.from_public_state(state,gw)
                 multigw_shadow=plan_multigw(
@@ -141,8 +143,9 @@ def main():
                     discount=float(mg_cfg.get("discount",.97)),
                     top_n=12,
                     cache_enabled=bool(mg_cfg.get("cache_enabled",True)),
-                    include_chips=bool(mg_cfg.get("include_chips",True)),
+                    include_chips=False,
                     dominance_pruning=bool(mg_cfg.get("dominance_pruning",True)),
+                    runtime_budget_seconds=float(mg_cfg.get("runtime_budget_seconds",45)),
                 )
             except Exception as exc:
                 # Shadow planning must never block the established V2 decision path.
@@ -164,6 +167,7 @@ def main():
             state.setdefault("warnings",[]).append(f"V3 probabilistic captaincy shadow unavailable: {exc}")
     chip_map=opportunity_map(fixtures,teams,gw,cfg)
     plans=augment_with_chip_plans(plans,state,players,players_by_id,proj_by_id,gw,cfg,chip_map)
+    v2_v3_comparison=compare_v2_v3(plans[0] if plans else None,multigw_shadow) if state["mode"] != "gw1_initial_build" else {"status":"not_applicable"}
     # WC/FH are intentionally shadow-only. Compare them with the best non-chip
     # sequential path under a bounded runtime, but never add them to production
     # optimizer_plans or allow the AI adjudicator to select them.
@@ -216,13 +220,15 @@ def main():
             "production_engine":"V2 managed optimizer",
             "shadow_engine":"V3 multi-GW planner" if multigw_shadow else None,
             "captaincy_shadow_status":"available" if captaincy_shadow else "unavailable",
-            "agreement":"Not promoted: shadow outputs are evidence only.",
+            "agreement":(f"{v2_v3_comparison.get('label')}: production and V3 first actions " + ("agree." if v2_v3_comparison.get("same_first_action") else "differ; shadow remains advisory.")) if v2_v3_comparison.get("status")=="available" else "V3 comparison unavailable; production remains V2.",
+            "v2_v3_comparison":v2_v3_comparison,
+            "equivalence_band_points":float(cfg.get("optimizer",{}).get("near_tie_cluster_width_points",.75)),
             "wc_fh_policy":"Wildcard/Free Hit are shadow-only and cannot be selected by production.",
         }
     payload={"mode":state["mode"],"report_type":kind,"delivery_mode":delivery,"gameweek":gw,
       "objective":cfg["objective"],"risk_profile":cfg["risk_profile"],"state":state,
       "optimizer_plans":[compact_plan(p,i+1) for i,p in enumerate(plans)],"projection_evidence":pe,
-      "multigw_shadow":multigw_shadow,"captaincy_shadow":captaincy_shadow,"decision_audit":decision_audit,"elite_signal":elite,"chip_opportunities":chip_map,"news":news,
+      "multigw_shadow":multigw_shadow,"v2_v3_comparison":v2_v3_comparison,"captaincy_shadow":captaincy_shadow,"decision_audit":decision_audit,"elite_signal":elite,"chip_opportunities":chip_map,"news":news,
       "warnings":state.get("warnings",[])+warn_news+warn_stats+warn_elite,
       "policy":{"projection_weights":cfg["projection_weights"],
                 "bench_valuation":"probabilistic auto-sub-aware" if state["mode"]=="gw1_initial_build" else f"legacy managed weight {cfg['bench_weight']}",
@@ -267,8 +273,9 @@ def main():
     sorted_scores=sorted((p["optimizer_score"] for p in plans),reverse=True)
     sep=(sorted_scores[0]-sorted_scores[1]) if len(sorted_scores)>1 else 9
     decision["confidence"]=recommendation_confidence(state,chosen,proj_by_id,warn_news,warn_stats+warn_elite,sep)
-    if sep < 0.50:
-        decision["plan_separation_note"]=f"Low optimizer separation: top plans are clustered within {sep:.2f} points; small rank differences should be treated as noise."
+    eq_band=float(cfg.get("optimizer",{}).get("near_tie_cluster_width_points",.75))
+    if sep <= eq_band:
+        decision["plan_separation_note"]=f"Top plans are inside the {eq_band:.2f}-point equivalence band (numerical separation {sep:.2f}); treat the point gap as noise and prefer robustness/flexibility tie-breaks."
     else:
         decision["plan_separation_note"]=f"Optimizer separation between the top two plans: {sep:.2f} points."
     decision["news_status"]=news.get("status","OK")
@@ -277,7 +284,20 @@ def main():
       "sources":[{"url":x.get("source_url"),"title":x.get("source_title"),"timestamp":x.get("published_at"),"tier":x.get("source_tier"),"confidence":x.get("confidence"),"claim":x.get("claim")} for x in news.get("items",[])],
       "external_stats_provider":external.get("provider"),"projection_model":{"type":"component model","weights":cfg["projection_weights"],
       "bench_valuation":"probabilistic auto-sub-aware" if state["mode"]=="gw1_initial_build" else f"legacy managed weight {cfg['bench_weight']}"},
-      "projections":projections,"multigw_shadow":multigw_shadow,"captaincy_shadow":captaincy_shadow,"decision_audit":decision_audit,"elite":elite,"chip_opportunities":chip_map,"selected_plan":compact_plan(chosen),"warnings":payload["warnings"]}
+      "projections":projections,"multigw_shadow":multigw_shadow,"v2_v3_comparison":v2_v3_comparison,"captaincy_shadow":captaincy_shadow,"decision_audit":decision_audit,"elite":elite,"chip_opportunities":chip_map,"selected_plan":compact_plan(chosen),"warnings":payload["warnings"]}
+    try:
+        snap_now=datetime.now(timezone.utc).isoformat()
+        snapshot={
+          "schema_version":1,"generated_at":snap_now,"deadline":nxt.get("deadline_time"),"gameweek":gw,"report_type":kind,
+          "state":state,"players_by_id":players_by_id,"projections":projections,"config":cfg,
+          "v2_plans":[compact_plan(p,i+1) for i,p in enumerate(plans)],"v3_paths":multigw_shadow,"v2_v3_comparison":v2_v3_comparison,
+          "evidence":[{"kind":"news","published_at":x.get("published_at"),"source":x.get("source_url")} for x in news.get("items",[]) if x.get("published_at")]
+                    + [{"kind":"official_fpl","observed_at":snap_now},{"kind":"external_stats","observed_at":snap_now}],
+        }
+        write_snapshot(ROOT/f".state/backtest/gw{gw}-{kind}.json",snapshot)
+    except Exception as exc:
+        state.setdefault("warnings",[]).append(f"Backtest snapshot not written: {exc}")
+
     attachments=[(f"fpl-gw{gw}-openai-prompt.txt",audit_text(payload),"text/plain"),
       (f"fpl-gw{gw}-evidence-pack.json",json.dumps(evidence,indent=2,default=str),"application/json"),
       (f"fpl-gw{gw}-optimizer-plans.csv",plans_csv(plans,players_by_id),"text/csv")]

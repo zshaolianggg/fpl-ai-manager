@@ -4,7 +4,7 @@ from collections import defaultdict
 from copy import deepcopy
 from .optimizer import _ilp_squads, plan_metrics, flexibility_adjustment, diversify, _pid
 from .lineup import best_lineup
-from .multigw import ManagerState, plan_multigw
+from .multigw import ManagerState, plan_multigw, structural_candidate_ids, _greedy_chip_squad, PlannerAction, transition
 
 
 
@@ -13,13 +13,46 @@ def wc_fh_production_enabled(cfg):
     return bool(cfg.get("chips", {}).get("production_wildcard_freehit", False))
 
 
-def evaluate_wc_fh_shadow(state, players_by_id, projections, proj_by_id, next_gw, cfg, chip_map, *, news_status="OK", all_low=False):
-    """Compare WC/FH-now against the best non-chip sequential path.
+def _direct_chip_shadow_path(initial, chip, players_by_id, projections, proj_by_id, cfg, settings, horizon):
+    """Construct WC/FH directly, then continue with normal no-chip planning.
 
-    This function is deliberately advisory: it never returns production plans.
-    Positive edges are reported for monitoring only until historical/live shadow
-    validation is strong enough to promote chip actions.
+    Alpha 4 asked the normal beam to *discover* a forced chip action, which could
+    fail under a tight action/search budget. Alpha 5 constructs the chip squad
+    first, transitions it explicitly, then searches only the remaining GWs.
     """
+    mg=cfg.get("multigw",{})
+    per_pos=int(settings.get("direct_chip_candidate_per_position", max(8,int(settings.get("candidate_per_position",5)))))
+    candidate_ids=structural_candidate_ids(projections,initial.squad,initial.gw,horizon=max(1,horizon),per_position=per_pos)
+    chip_horizon=1 if chip=="freehit" else max(1,horizon)
+    squad=_greedy_chip_squad(initial,candidate_ids,players_by_id,proj_by_id,horizon=chip_horizon,bench_weight=float(cfg.get("bench_weight",.2)),discount=float(mg.get("discount",.97)))
+    tr=transition(initial,PlannerAction(chip=chip,squad=tuple(squad)),players_by_id,proj_by_id,float(cfg.get("bench_weight",.2)),discount=float(mg.get("discount",.97)))
+    if tr is None:
+        return None
+    discount=float(mg.get("discount",.97))
+    first={
+        "gw":initial.gw,"transfers":[],"roll":False,"chip":chip,"chip_squad":list(squad),
+        "hit_cost":0,"lineup_score":round(tr.lineup_score,2),"bank_after":tr.state.bank,
+        "free_transfers_after":tr.state.free_transfers,"lineup":tr.lineup,
+    }
+    if horizon<=1:
+        return {"score":float(tr.lineup_score),"first_action":first,"steps":[first],"planner_diagnostics":{"construction":"direct_chip","continued_gws":0}}
+    future=plan_multigw(
+        tr.state,players_by_id,projections,proj_by_id,planning_horizon=horizon-1,
+        candidate_per_position=int(settings.get("candidate_per_position",5)),beam_width=int(settings.get("beam_width",25)),
+        max_transfers_per_gw=int(settings.get("max_transfers_per_gw",2)),bench_weight=float(cfg.get("bench_weight",.2)),
+        discount=discount,top_n=1,cache_enabled=True,include_chips=False,dominance_pruning=True,
+        runtime_budget_seconds=float(settings.get("runtime_budget_seconds_per_run",20)),
+    )
+    future_score=float(future[0]["score"]) if future else 0.0
+    steps=[first]+(future[0].get("steps",[]) if future else [])
+    return {
+        "score":float(tr.lineup_score)+discount*future_score,"first_action":first,"steps":steps,
+        "planner_diagnostics":{"construction":"direct_chip","continued_gws":horizon-1,"future_available":bool(future),"future":future[0].get("planner_diagnostics") if future else None},
+    }
+
+
+def evaluate_wc_fh_shadow(state, players_by_id, projections, proj_by_id, next_gw, cfg, chip_map, *, news_status="OK", all_low=False):
+    """Compare direct WC/FH-now constructions with the best non-chip path."""
     settings = cfg.get("chips", {}).get("wc_fh_shadow", {})
     if next_gw == 1 or not settings.get("enabled", True):
         return {"status": "disabled", "production_policy": "shadow_only"}
@@ -29,14 +62,10 @@ def evaluate_wc_fh_shadow(state, players_by_id, projections, proj_by_id, next_gw
     mg = cfg.get("multigw", {})
     horizon = int(settings.get("planning_horizon", 3))
     common = dict(
-        planning_horizon=horizon,
-        candidate_per_position=int(settings.get("candidate_per_position", 5)),
-        beam_width=int(settings.get("beam_width", 25)),
-        max_transfers_per_gw=int(settings.get("max_transfers_per_gw", 2)),
-        bench_weight=float(cfg.get("bench_weight", .2)),
-        discount=float(mg.get("discount", .97)),
-        top_n=1, cache_enabled=True, dominance_pruning=True,
-        runtime_budget_seconds=float(settings.get("runtime_budget_seconds_per_run", 20)),
+        planning_horizon=horizon,candidate_per_position=int(settings.get("candidate_per_position", 5)),
+        beam_width=int(settings.get("beam_width", 25)),max_transfers_per_gw=int(settings.get("max_transfers_per_gw", 2)),
+        bench_weight=float(cfg.get("bench_weight", .2)),discount=float(mg.get("discount", .97)),
+        top_n=1,cache_enabled=True,dominance_pruning=True,runtime_budget_seconds=float(settings.get("runtime_budget_seconds_per_run", 20)),
     )
     initial = ManagerState.from_public_state(state, next_gw)
     baseline = plan_multigw(initial, players_by_id, projections, proj_by_id, include_chips=False, **common)
@@ -49,47 +78,25 @@ def evaluate_wc_fh_shadow(state, players_by_id, projections, proj_by_id, next_gw
     low_mult = float(settings.get("low_confidence_edge_multiplier", 1.5))
     degraded = str(news_status).upper() == "DEGRADED"
     forced = sum(float(proj_by_id[x["player_id"]].get("expected_minutes", 90)) < 45 for x in state.get("squad", []))
-
-    result = {
-        "status": "available", "production_policy": "shadow_only",
-        "baseline_non_chip_score": round(baseline_score, 3),
-        "planning_horizon": horizon, "all_low_confidence": bool(all_low),
-        "news_status": news_status, "forced_low_minutes_players": forced,
-        "chips": {},
-    }
-    avail = state.get("chips_available", {})
-    for chip, avail_key, threshold_key in (("wildcard", "wildcard", "wildcard"), ("freehit", "freehit", "freehit")):
+    result = {"status":"available","production_policy":"shadow_only","baseline_non_chip_score":round(baseline_score,3),
+              "planning_horizon":horizon,"all_low_confidence":bool(all_low),"news_status":news_status,
+              "forced_low_minutes_players":forced,"chips":{},"baseline_first_action":baseline[0].get("first_action")}
+    avail=state.get("chips_available",{})
+    for chip,avail_key,threshold_key in (("wildcard","wildcard","wildcard"),("freehit","freehit","freehit")):
         if not avail.get(avail_key):
-            result["chips"][chip] = {"available": False}
-            continue
-        paths = plan_multigw(initial, players_by_id, projections, proj_by_id, include_chips=True, force_first_chip=chip, **common)
-        if not paths:
-            result["chips"][chip] = {"available": True, "evaluated": False, "reason": "No legal forced-chip shadow path found within budget."}
-            continue
-        chip_score = float(paths[0]["score"])
-        gross = chip_score - baseline_score
-        hurdle = float(thresholds.get(threshold_key, 0.0))
-        min_reserve = float(settings.get(f"minimum_{chip}_preservation_points", 10.0 if chip == "wildcard" else 8.0))
-        preserve = max(min_reserve, reserve_factor * hurdle)
-        net = gross - preserve
-        required = min_net * (low_mult if all_low else 1.0)
-        # Degraded news blocks promotion unless the permanent squad has a genuine
-        # emergency (two or more sub-45 expected-minute players). Production is
-        # still shadow-only regardless of this flag.
-        confidence_gate = (not all_low) and (not degraded or forced >= 2)
-        promotion_eligible = confidence_gate and net >= required
-        result["chips"][chip] = {
-            "available": True, "evaluated": True,
-            "chip_path_score": round(chip_score, 3),
-            "gross_advantage_vs_best_non_chip": round(gross, 3),
-            "preservation_reserve": round(preserve, 3),
-            "net_opportunity_edge": round(net, 3),
-            "minimum_required_edge": round(required, 3),
-            "confidence_gate_passed": confidence_gate,
-            "promotion_eligible_shadow_only": promotion_eligible,
-            "first_action": paths[0].get("first_action"),
-            "planner_diagnostics": paths[0].get("planner_diagnostics"),
-        }
+            result["chips"][chip]={"available":False}; continue
+        path=_direct_chip_shadow_path(initial,chip,players_by_id,projections,proj_by_id,cfg,settings,horizon)
+        if not path:
+            result["chips"][chip]={"available":True,"evaluated":False,"reason":"Direct chip construction could not produce a legal squad."}; continue
+        chip_score=float(path["score"]); gross=chip_score-baseline_score
+        hurdle=float(thresholds.get(threshold_key,0.0)); min_reserve=float(settings.get(f"minimum_{chip}_preservation_points",10.0 if chip=="wildcard" else 8.0))
+        preserve=max(min_reserve,reserve_factor*hurdle); net=gross-preserve; required=min_net*(low_mult if all_low else 1.0)
+        confidence_gate=(not all_low) and (not degraded or forced>=2); promotion_eligible=confidence_gate and net>=required
+        result["chips"][chip]={"available":True,"evaluated":True,"chip_path_score":round(chip_score,3),
+            "gross_advantage_vs_best_non_chip":round(gross,3),"preservation_reserve":round(preserve,3),
+            "net_opportunity_edge":round(net,3),"minimum_required_edge":round(required,3),
+            "confidence_gate_passed":confidence_gate,"promotion_eligible_shadow_only":promotion_eligible,
+            "first_action":path.get("first_action"),"planner_diagnostics":path.get("planner_diagnostics")}
     return result
 
 def _adaptive(early,late,gw):

@@ -115,28 +115,47 @@ def _formation_counts(starters, proj_by_id):
     return counts
 
 
-def _bench_legality_factor(bench_pid, starters, proj_by_id):
-    """First-order probability that this outfield bench position can cover a miss.
+def _bench_legality_factor(bench_pid, starters, proj_by_id, gw):
+    """Probability-weighted first-order formation legality.
 
-    Exact substitution legality depends on the realised combination/order of
-    no-shows. This bounded factor prevents, for example, a midfielder on the
-    bench being treated as a perfect substitute when a 3-4-3 XI loses a defender.
+    Older builds averaged legality equally across all ten outfield starters.
+    That can over/under-value a bench player when the actual no-show risk is
+    concentrated in one position. Alpha 5 weights each possible missing starter
+    by that starter's own GW no-show probability.
     """
     bpos = int(proj_by_id[bench_pid]["position"])
     counts = _formation_counts(starters, proj_by_id)
-    eligible = 0
-    total = 0
+    eligible_weight = 0.0
+    total_weight = 0.0
     for pid, _ in starters:
         spos = int(proj_by_id[pid]["position"])
         if spos == 1:
             continue
-        total += 1
+        miss = gw_zero_probability(proj_by_id[pid], gw)
+        if miss <= 0:
+            continue
+        total_weight += miss
         trial = dict(counts)
         trial[spos] -= 1
         trial[bpos] += 1
         if trial[2] >= 3 and trial[3] >= 2 and trial[4] >= 1:
-            eligible += 1
-    return eligible/max(1, total)
+            eligible_weight += miss
+    return eligible_weight/max(1e-9, total_weight) if total_weight > 0 else 1.0
+
+
+def gw_points_conditional_on_appearance(row, gw):
+    """Expected GW points conditional on recording minutes.
+
+    ``per_gw`` is already an *unconditional* expectation (zero-minute outcomes
+    are included by the projection engine). Keeping this helper explicit lets
+    auto-sub valuation correctly use P(appearance) * E[points | appearance]
+    without accidentally applying P(appearance) twice.
+    """
+    p_app = gw_appearance_probability(row, gw)
+    ep = float(row.get("per_gw", {}).get(gw, 0))
+    if p_app <= 1e-9:
+        return 0.0
+    return ep/p_app
 
 
 def expected_auto_sub_points(starters, bench_order, proj_by_id, gw):
@@ -158,10 +177,11 @@ def expected_auto_sub_points(starters, bench_order, proj_by_id, gw):
     prior_apps = []
     for pid in outfield_bench:
         needed = _prob_more_starter_misses_than_prior_bench_apps(miss_probs, prior_apps)
-        legality = _bench_legality_factor(pid, starters, proj_by_id)
-        ep = float(proj_by_id[pid]["per_gw"].get(gw, 0))
-        total += needed * legality * ep
-        prior_apps.append(gw_appearance_probability(proj_by_id[pid], gw))
+        legality = _bench_legality_factor(pid, starters, proj_by_id, gw)
+        p_app = gw_appearance_probability(proj_by_id[pid], gw)
+        conditional_ep = gw_points_conditional_on_appearance(proj_by_id[pid], gw)
+        total += needed * legality * p_app * conditional_ep
+        prior_apps.append(p_app)
     return round(total, 4)
 
 

@@ -38,7 +38,7 @@
     "beam_width": 45,
     "candidate_per_position": 14,
     "max_transfers_considered": 3,
-    "near_tie_cluster_width_points": 0.5,
+    "near_tie_cluster_width_points": 0.75,
     "incoming_per_out": 10,
     "max_evaluations_per_depth": 3000,
     "runtime_budget_seconds": 180
@@ -119,7 +119,8 @@
       "minimum_wildcard_preservation_points": 10.0,
       "minimum_freehit_preservation_points": 8.0,
       "minimum_net_edge_points": 4.0,
-      "low_confidence_edge_multiplier": 1.5
+      "low_confidence_edge_multiplier": 1.5,
+      "direct_chip_candidate_per_position": 8
     }
   },
   "state_file": ".state/manager_state.json",
@@ -164,9 +165,10 @@
     "discount": 0.97,
     "cache_enabled": true,
     "include_diagnostics": true,
-    "include_chips": true,
+    "include_chips": false,
     "dominance_pruning": true,
-    "price_paths_enabled": true
+    "price_paths_enabled": true,
+    "runtime_budget_seconds": 45
   },
   "runtime": {
     "total_budget_seconds": 900,
@@ -178,5 +180,10 @@
     "elite_discovery_budget_seconds": 75,
     "elite_signal_budget_seconds": 60,
     "openai_decision_timeout_seconds": 90
+  },
+  "backtest": {
+    "enabled": true,
+    "snapshot_dir": ".state/backtest",
+    "schema_version": 1
   }
 }

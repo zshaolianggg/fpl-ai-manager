@@ -164,3 +164,13 @@ Alpha 4 extends the shadow multi-GW planner with chip-state and price-path mecha
 - Chip squad construction in the shadow planner is dependency-light greedy local search. The established V2 ILP remains the production benchmark until replay/shadow validation justifies promotion.
 
 The multi-GW planner remains disabled by default and runs only when `multigw.enabled` is explicitly enabled.
+
+## V3 Alpha 5 — validation and promotion layer
+
+Alpha 5 keeps V2 as production authority but runs V3 multi-GW transfer/ROLL planning as a bounded shadow comparison whenever `multigw.shadow_mode` is enabled. The two engines' first actions are explicitly compared in the evidence/report.
+
+Near-tied production plans (default band: 0.75 points) are treated as equivalent and resolved by robustness/flexibility rather than decimal projection precision. Wildcard/Free Hit remain shadow-only, but their shadow evaluation now directly constructs a legal chip squad before continuing the sequential planner.
+
+Every due run also attempts to store a frozen pre-deadline replay snapshot in `.state/backtest/`. These snapshots can be replayed without network access using `scripts/backtest_replay.py`; evidence timestamped after the recorded deadline is rejected by the leakage guard.
+
+See `V3_BUILD_NOTES_ALPHA5.md` for details.
