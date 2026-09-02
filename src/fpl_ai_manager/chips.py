@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 from collections import defaultdict
+from time import monotonic
 from copy import deepcopy
 from .optimizer import _ilp_squads, plan_metrics, flexibility_adjustment, diversify, _pid
 from .lineup import best_lineup
@@ -24,7 +25,7 @@ def _direct_chip_shadow_path(initial, chip, players_by_id, projections, proj_by_
     per_pos=int(settings.get("direct_chip_candidate_per_position", max(8,int(settings.get("candidate_per_position",5)))))
     candidate_ids=structural_candidate_ids(projections,initial.squad,initial.gw,horizon=max(1,horizon),per_position=per_pos)
     chip_horizon=1 if chip=="freehit" else max(1,horizon)
-    squad=_greedy_chip_squad(initial,candidate_ids,players_by_id,proj_by_id,horizon=chip_horizon,bench_weight=float(cfg.get("bench_weight",.2)),discount=float(mg.get("discount",.97)))
+    squad=_greedy_chip_squad(initial,candidate_ids,players_by_id,proj_by_id,horizon=chip_horizon,bench_weight=float(cfg.get("bench_weight",.2)),discount=float(mg.get("discount",.97)),runtime_budget_seconds=float(settings.get("direct_constructor_budget_seconds",7)))
     tr=transition(initial,PlannerAction(chip=chip,squad=tuple(squad)),players_by_id,proj_by_id,float(cfg.get("bench_weight",.2)),discount=float(mg.get("discount",.97)))
     if tr is None:
         return None
@@ -60,6 +61,9 @@ def evaluate_wc_fh_shadow(state, players_by_id, projections, proj_by_id, next_gw
         return {"status": "disabled", "production_policy": "shadow_only"}
 
     mg = cfg.get("multigw", {})
+    started = monotonic()
+    total_budget = float(settings.get("total_budget_seconds",35))
+    def remaining(): return max(0.0,total_budget-(monotonic()-started))
     horizon = int(settings.get("planning_horizon", 3))
     common = dict(
         planning_horizon=horizon,candidate_per_position=int(settings.get("candidate_per_position", 5)),
@@ -68,6 +72,7 @@ def evaluate_wc_fh_shadow(state, players_by_id, projections, proj_by_id, next_gw
         top_n=1,cache_enabled=True,dominance_pruning=True,runtime_budget_seconds=float(settings.get("runtime_budget_seconds_per_run", 20)),
     )
     initial = ManagerState.from_public_state(state, next_gw)
+    common["runtime_budget_seconds"] = min(float(common["runtime_budget_seconds"]), remaining())
     baseline = plan_multigw(initial, players_by_id, projections, proj_by_id, include_chips=False, **common)
     if not baseline:
         return {"status": "unavailable", "production_policy": "shadow_only", "reason": "No non-chip sequential baseline path."}
@@ -83,9 +88,18 @@ def evaluate_wc_fh_shadow(state, players_by_id, projections, proj_by_id, next_gw
               "forced_low_minutes_players":forced,"chips":{},"baseline_first_action":baseline[0].get("first_action")}
     avail=state.get("chips_available",{})
     for chip,avail_key,threshold_key in (("wildcard","wildcard","wildcard"),("freehit","freehit","freehit")):
+        if remaining() <= 2:
+            result["chips"][chip]={"available":bool(avail.get(avail_key)),"evaluated":False,"reason":"WC/FH total shadow runtime budget exhausted."}
+            continue
         if not avail.get(avail_key):
             result["chips"][chip]={"available":False}; continue
-        path=_direct_chip_shadow_path(initial,chip,players_by_id,projections,proj_by_id,cfg,settings,horizon)
+        local_settings=dict(settings)
+        rem=remaining()
+        # Split the remaining budget between direct squad construction and the
+        # continuation planner so one shadow chip cannot consume the whole run.
+        local_settings["direct_constructor_budget_seconds"]=min(float(settings.get("direct_constructor_budget_seconds",7)), max(1.0, rem*0.45))
+        local_settings["runtime_budget_seconds_per_run"]=min(float(settings.get("runtime_budget_seconds_per_run",10)), max(1.0, rem*0.45))
+        path=_direct_chip_shadow_path(initial,chip,players_by_id,projections,proj_by_id,cfg,local_settings,horizon)
         if not path:
             result["chips"][chip]={"available":True,"evaluated":False,"reason":"Direct chip construction could not produce a legal squad."}; continue
         chip_score=float(path["score"]); gross=chip_score-baseline_score

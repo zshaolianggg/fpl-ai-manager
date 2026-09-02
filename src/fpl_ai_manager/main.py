@@ -115,7 +115,11 @@ def main():
     rs=gw_state(load_report_state(),gw)
     fresh_after=rs.get("preview_sent_at") if kind=="final" else None
     with stage("news_research"):
-        news,warn_news=research_news(news_names,cfg["news"]["allowed_domains"],os.getenv("OPENAI_MODEL","gpt-5"),kind,fresh_after) if cfg["news"]["enabled"] else ({"items":[],"freshness_note":"disabled"},[])
+        news,warn_news=research_news(
+            news_names,cfg["news"]["allowed_domains"],os.getenv("OPENAI_MODEL","gpt-5"),kind,fresh_after,
+            retry_attempts=int(cfg["news"].get("retry_attempts",2)),
+            per_attempt_timeout_seconds=float(cfg["news"].get("per_attempt_timeout_seconds",25)),
+        ) if cfg["news"]["enabled"] else ({"items":[],"freshness_note":"disabled","status":"DEGRADED"},[])
     nidx=news_by_player(news)
 
     with stage("external_stats"):
@@ -129,9 +133,10 @@ def main():
             plans=initial_build_plans(players,players_by_id,proj_by_id,gw,cfg);base=None
         else:
             plans,base=managed_plans(state,players_by_id,projections,proj_by_id,gw,cfg)
-        mg_cfg=cfg.get("multigw",{})
-        if mg_cfg.get("enabled") or mg_cfg.get("shadow_mode"):
-            try:
+    mg_cfg=cfg.get("multigw",{})
+    if mg_cfg.get("enabled") or mg_cfg.get("shadow_mode"):
+        try:
+            with stage("multigw_shadow"):
                 mg_state=ManagerState.from_public_state(state,gw)
                 multigw_shadow=plan_multigw(
                     mg_state,players_by_id,projections,proj_by_id,
@@ -141,15 +146,14 @@ def main():
                     max_transfers_per_gw=int(mg_cfg.get("max_transfers_per_gw",2)),
                     bench_weight=float(cfg.get("bench_weight",.2)),
                     discount=float(mg_cfg.get("discount",.97)),
-                    top_n=12,
+                    top_n=6,
                     cache_enabled=bool(mg_cfg.get("cache_enabled",True)),
                     include_chips=False,
                     dominance_pruning=bool(mg_cfg.get("dominance_pruning",True)),
-                    runtime_budget_seconds=float(mg_cfg.get("runtime_budget_seconds",45)),
+                    runtime_budget_seconds=float(mg_cfg.get("runtime_budget_seconds",25)),
                 )
-            except Exception as exc:
-                # Shadow planning must never block the established V2 decision path.
-                state.setdefault("warnings",[]).append(f"V3 multi-GW shadow planner unavailable: {exc}")
+        except Exception as exc:
+            state.setdefault("warnings",[]).append(f"V3 multi-GW shadow planner unavailable: {exc}")
     if not plans:
         send_email(f"FPL GW{gw} recommendation withheld","# FPL Recommendation Withheld\n\n- Optimizer produced no legal plan.");return 3
 

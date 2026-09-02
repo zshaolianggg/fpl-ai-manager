@@ -242,7 +242,7 @@ def _squad_value(squad, proj_by_id, gw, horizon, bench_weight, discount=0.97):
     return total
 
 
-def _greedy_chip_squad(state, candidate_ids, players_by_id, proj_by_id, *, horizon, bench_weight, discount):
+def _greedy_chip_squad(state, candidate_ids, players_by_id, proj_by_id, *, horizon, bench_weight, discount, runtime_budget_seconds=None):
     """Dependency-light local search for WC/FH squads.
 
     It is intentionally conservative for Alpha 4: no ILP dependency and no
@@ -250,6 +250,9 @@ def _greedy_chip_squad(state, candidate_ids, players_by_id, proj_by_id, *, horiz
     action while the production V2 ILP remains the fallback benchmark.
     """
     squad = tuple(state.squad)
+    started = monotonic()
+    def timed_out():
+        return runtime_budget_seconds is not None and monotonic()-started >= float(runtime_budget_seconds)
     sell = _sell_map_for_gw(state, proj_by_id, state.gw)
     original = set(state.squad)
     budget = int(state.bank) + sum(sell.values())
@@ -264,12 +267,14 @@ def _greedy_chip_squad(state, candidate_ids, players_by_id, proj_by_id, *, horiz
     pool = sorted(set(candidate_ids) | set(squad))
     improved = True
     loops = 0
-    while improved and loops < 20:
+    while improved and loops < 20 and not timed_out():
         loops += 1
         improved = False
         best_move = None
         for out in squad:
+            if timed_out(): break
             for inn in pool:
+                if timed_out(): break
                 if inn in squad or inn not in proj_by_id:
                     continue
                 if int(proj_by_id[out]["position"]) != int(proj_by_id[inn]["position"]):

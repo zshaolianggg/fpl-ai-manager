@@ -41,11 +41,12 @@ Do not use social-media/X sources. Do not invent publication times. If sources c
 HIGH means official/confirmed. MEDIUM means reputable and corroborated. LOW means specialist interpretation or unresolved conflict.
 Return only evidence that could change expected minutes, starting probability, role, or availability."""
 
-def research_news(players, allowed_domains, model=None, report_type='preview', fresh_after=None):
+def research_news(players, allowed_domains, model=None, report_type='preview', fresh_after=None, *, retry_attempts=2, per_attempt_timeout_seconds=25):
     if not os.getenv("OPENAI_API_KEY"):
         return {"items":[],"freshness_note":"OPENAI_API_KEY unavailable; news research skipped.","status":"DEGRADED","attempt_errors":["missing_api_key"]}, ["Fresh news unavailable: OPENAI_API_KEY missing."]
     from openai import OpenAI
-    client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    timeout=float(per_attempt_timeout_seconds)
+    client = OpenAI(api_key=os.environ["OPENAI_API_KEY"], max_retries=0, timeout=timeout)
     model = model or os.getenv("OPENAI_MODEL","gpt-5")
     prompt = (
         "Current UTC: " + datetime.now(timezone.utc).isoformat()
@@ -59,7 +60,7 @@ def research_news(players, allowed_domains, model=None, report_type='preview', f
         {"domains":allowed_domains,"label":"curated-domain search"},
         {"domains":allowed_domains[:12],"label":"reduced-domain search"},
         {"domains":None,"label":"fallback web search"},
-    ]
+    ][:max(1,min(3,int(retry_attempts)))]
     for i,attempt in enumerate(attempts,1):
         try:
             tool={"type":"web_search"}
@@ -67,7 +68,7 @@ def research_news(players, allowed_domains, model=None, report_type='preview', f
                 tool["filters"]={"allowed_domains":attempt["domains"]}
             resp=client.responses.create(
                 model=model,instructions=SYSTEM,input=prompt+f"\nAttempt mode: {attempt['label']}",
-                tools=[tool],text={"format":NEWS_SCHEMA},timeout=35.0
+                tools=[tool],text={"format":NEWS_SCHEMA},timeout=timeout
             )
             data=json.loads(resp.output_text)
             data["status"]="OK"

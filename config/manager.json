@@ -35,13 +35,13 @@
   },
   "optimizer": {
     "top_plans": 20,
-    "beam_width": 45,
-    "candidate_per_position": 14,
+    "beam_width": 35,
+    "candidate_per_position": 12,
     "max_transfers_considered": 3,
     "near_tie_cluster_width_points": 0.75,
-    "incoming_per_out": 10,
-    "max_evaluations_per_depth": 3000,
-    "runtime_budget_seconds": 180
+    "incoming_per_out": 8,
+    "max_evaluations_per_depth": 1400,
+    "runtime_budget_seconds": 75
   },
   "elite": {
     "enabled": true,
@@ -56,7 +56,7 @@
   },
   "news": {
     "enabled": true,
-    "max_players": 35,
+    "max_players": 20,
     "allowed_domains": [
       "premierleague.com",
       "arsenal.com",
@@ -86,8 +86,8 @@
       "fantasyfootballscout.co.uk",
       "allaboutfpl.com"
     ],
-    "retry_attempts": 3,
-    "per_attempt_timeout_seconds": 35
+    "retry_attempts": 2,
+    "per_attempt_timeout_seconds": 25
   },
   "stats": {
     "understat_enabled": true,
@@ -110,17 +110,19 @@
     "production_wildcard_freehit": false,
     "wc_fh_shadow": {
       "enabled": true,
-      "planning_horizon": 3,
-      "candidate_per_position": 5,
-      "beam_width": 25,
+      "planning_horizon": 2,
+      "candidate_per_position": 4,
+      "beam_width": 15,
       "max_transfers_per_gw": 2,
-      "runtime_budget_seconds_per_run": 20,
+      "runtime_budget_seconds_per_run": 10,
       "preservation_reserve_factor": 0.5,
       "minimum_wildcard_preservation_points": 10.0,
       "minimum_freehit_preservation_points": 8.0,
       "minimum_net_edge_points": 4.0,
       "low_confidence_edge_multiplier": 1.5,
-      "direct_chip_candidate_per_position": 8
+      "direct_chip_candidate_per_position": 5,
+      "total_budget_seconds": 35,
+      "direct_constructor_budget_seconds": 7
     }
   },
   "state_file": ".state/manager_state.json",
@@ -158,9 +160,9 @@
   "multigw": {
     "enabled": false,
     "shadow_mode": true,
-    "planning_horizon": 4,
-    "candidate_per_position": 8,
-    "beam_width": 60,
+    "planning_horizon": 3,
+    "candidate_per_position": 6,
+    "beam_width": 35,
     "max_transfers_per_gw": 2,
     "discount": 0.97,
     "cache_enabled": true,
@@ -168,10 +170,10 @@
     "include_chips": false,
     "dominance_pruning": true,
     "price_paths_enabled": true,
-    "runtime_budget_seconds": 45
+    "runtime_budget_seconds": 25
   },
   "runtime": {
-    "total_budget_seconds": 900,
+    "total_budget_seconds": 720,
     "candidate_summary_players": 45,
     "candidate_summary_budget_seconds": 60,
     "bulk_fpl_timeout_seconds": 6,
@@ -179,7 +181,7 @@
     "bulk_fpl_workers": 10,
     "elite_discovery_budget_seconds": 75,
     "elite_signal_budget_seconds": 60,
-    "openai_decision_timeout_seconds": 90
+    "openai_decision_timeout_seconds": 60
   },
   "backtest": {
     "enabled": true,
