@@ -20,7 +20,7 @@ SYSTEM="""You explain an already-final Fantasy Premier League recommendation.
 You have ZERO decision authority. Never change the selected plan, transfers, captain, vice-captain, bench, chip, bank, or prices. Never invent facts.
 Use player names supplied in the packet, never raw player IDs in user-facing prose.
 All money fields supplied to you are already human-readable GBP millions; reproduce them exactly and never reinterpret tenths.
-Never compare native V2 optimizer_score with native V3 path_score: they use different objectives/horizons. Use only the common_basis comparison when discussing which route projects better across V2 and V3.
+Never compare native V2 optimizer_score with native V3 path_score: they use different objectives/horizons. Use only a common_basis block whose status is available; it is valid only when both routes were evaluated across the identical explicit GW list. If common_basis is unavailable, say the routes differ but no fair multi-GW comparison was available.
 Explain why the deterministic plan was selected, especially equivalence-band flexibility or V2/V3 route differences. Treat tiny projection gaps as noise. Keep the explanation concise and practical. If news is degraded, say that this lowers confidence rather than implying negative news."""
 
 
@@ -48,11 +48,15 @@ def build_explanation_packet(chosen, alternative, decision, comparison, players_
     cb=comp.get('common_basis') or {}
     if cb.get('status')=='available':
         comp['common_basis']={
-            'status':'available','horizon_gws':cb.get('horizon_gws'),'objective':cb.get('objective'),
+            'status':'available','horizon_gws':cb.get('horizon_gws'),'evaluated_gws':cb.get('evaluated_gws'),'objective':cb.get('objective'),
             'v2_score':cb.get('v2_score'),'v3_score':cb.get('v3_score'),'delta_v3_minus_v2':cb.get('delta_v3_minus_v2'),
             'v2_first_gw_score':cb.get('v2_first_gw_score'),'v3_first_gw_score':cb.get('v3_first_gw_score'),
             'v2_bank_after_first':money(cb.get('v2_bank_after_first')),'v3_bank_after_first':money(cb.get('v3_bank_after_first')),
+            'v2_per_gw':[{'gw':x.get('gw'),'net_score':x.get('net_score')} for x in (cb.get('v2_steps') or [])],
+            'v3_per_gw':[{'gw':x.get('gw'),'net_score':x.get('net_score')} for x in (cb.get('v3_steps') or [])],
         }
+    elif cb:
+        comp['common_basis']={'status':'unavailable','reason':cb.get('reason')}
     sig=[]
     for s in decision.get('transfer_signals',[])[:8]:
         sig.append({**s,'out_name':name(s['out']),'in_name':name(s['in'])})

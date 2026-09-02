@@ -70,3 +70,33 @@ class TestAlpha6Post1Corrections(unittest.TestCase):
         c=compare_v2_v3(v2,v3)
         self.assertFalse(c['native_scores_comparable'])
         self.assertIn('different objectives',c['native_score_note'])
+
+class TestAlpha6Post2Corrections(unittest.TestCase):
+    def test_email_html_is_flat_and_subjects_are_unique_by_run(self):
+        from datetime import datetime, timezone
+        from fpl_ai_manager.emailer import html_body, _unique_subject
+        body='# Title\n\n## Transfers\n- A → B\n\n## Starting XI\n- Player'
+        rendered=html_body(body,datetime(2026,9,2,2,0,tzinfo=timezone.utc))
+        self.assertNotIn('<details',rendered.lower())
+        self.assertNotIn('<summary',rendered.lower())
+        self.assertIn('<h2>Transfers</h2>',rendered)
+        self.assertIn('<h2>Starting XI</h2>',rendered)
+        a=_unique_subject('FPL GW3 Preview Recommendation',datetime(2026,9,2,2,0,tzinfo=timezone.utc))
+        b=_unique_subject('FPL GW3 Preview Recommendation',datetime(2026,9,2,3,0,tzinfo=timezone.utc))
+        self.assertNotEqual(a,b)
+
+    def test_explainer_common_basis_keeps_explicit_gw_list(self):
+        from fpl_ai_manager.explainer import build_explanation_packet
+        players={1:{'web_name':'A'},2:{'web_name':'B'}}
+        chosen={'plan_id':'p','transfers':[{'out':1,'in':2,'sell':45,'buy':40}], 'optimizer_score':10,'bank_after':25,'hit_cost':0,'chip':None}
+        comparison={'status':'available','v2_transfers':[],'v3_transfers':[],
+                    'common_basis':{'status':'available','horizon_gws':3,'evaluated_gws':[3,4,5],'objective':'same',
+                                    'v2_score':160,'v3_score':161,'delta_v3_minus_v2':1,'v2_first_gw_score':55,'v3_first_gw_score':55.1,
+                                    'v2_bank_after_first':25,'v3_bank_after_first':19,
+                                    'v2_steps':[{'gw':3,'net_score':55},{'gw':4,'net_score':54},{'gw':5,'net_score':53}],
+                                    'v3_steps':[{'gw':3,'net_score':55.1},{'gw':4,'net_score':54.2},{'gw':5,'net_score':53.3}]}}
+        packet=build_explanation_packet(chosen,None,{'transfer_signals':[]},comparison,players,{'items':[]},None)
+        cb=packet['v2_v3']['common_basis']
+        self.assertEqual(cb['evaluated_gws'],[3,4,5])
+        self.assertEqual(len(cb['v2_per_gw']),3)
+        self.assertEqual(len(cb['v3_per_gw']),3)

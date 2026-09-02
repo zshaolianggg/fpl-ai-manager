@@ -68,16 +68,26 @@ def render_report(gw,kind,delivery,mode,plan,decision,players,proj,base_plan=Non
             cb=comp.get('common_basis') or {}
             if cb.get('status')=='available':
                 delta=float(cb.get('delta_v3_minus_v2') or 0)
+                gws=cb.get('evaluated_gws') or []
+                gw_label=', '.join(f"GW{x}" for x in gws) if gws else f"{int(cb.get('horizon_gws') or 0)} GW"
                 lines.append(
-                    f"- Common-basis comparison ({int(cb.get('horizon_gws') or 0)} GW probabilistic sequential objective): "
+                    f"- Common-basis comparison ({gw_label}; probabilistic sequential objective): "
                     f"V2 **{float(cb.get('v2_score') or 0):.2f}**, V3 **{float(cb.get('v3_score') or 0):.2f}**, "
                     f"V3−V2 **{delta:+.2f}**. First-GW common score: V2 **{float(cb.get('v2_first_gw_score') or 0):.2f}**, "
                     f"V3 **{float(cb.get('v3_first_gw_score') or 0):.2f}**."
                 )
+                v2_steps=cb.get('v2_steps') or []; v3_steps=cb.get('v3_steps') or []
+                if len(v2_steps)==len(v3_steps)==len(gws) and gws:
+                    per=[]
+                    for a,b in zip(v2_steps,v3_steps):
+                        per.append(f"GW{a.get('gw')}: V2 {float(a.get('net_score') or 0):.2f} / V3 {float(b.get('net_score') or 0):.2f}")
+                    lines.append("- Common-basis per-GW net scores: **" + "; ".join(per) + "**.")
                 if cb.get('v2_bank_after_first') is not None and cb.get('v3_bank_after_first') is not None:
                     lines.append(f"- Common-basis bank after first action: V2 **{money(cb['v2_bank_after_first'])}**, V3 **{money(cb['v3_bank_after_first'])}**.")
             else:
-                lines.append("- Native V2 optimizer score and V3 path score are **not directly comparable**; no common-basis route score was available for this run.")
+                reason=cb.get('reason')
+                suffix=f" Reason: {reason}." if reason else ""
+                lines.append("- Native V2 optimizer score and V3 path score are **not directly comparable**; no valid equal-horizon common-basis route score was available for this run."+suffix)
             if decision.get('v2_v3_explanation'):
                 lines.append(f"- Why they differ: {decision['v2_v3_explanation']}")
         if decision_audit.get("equivalence_band_points") is not None:

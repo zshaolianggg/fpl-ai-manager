@@ -126,3 +126,21 @@ class Alpha3PlannerCacheTests(unittest.TestCase):
         diag = paths[0]["planner_diagnostics"]
         self.assertGreater(diag["lineup_cache_hits"], 0)
         self.assertLess(diag["unique_lineups"], diag["unique_transitions"])
+
+class CommonBasisHorizonTests(unittest.TestCase):
+    def test_common_basis_requires_and_returns_identical_three_gw_horizon(self):
+        from fpl_ai_manager.decision_compare import evaluate_common_basis
+        players, projections, proj = make_world()
+        # Give GW3 non-zero projections so a 3-GW comparison has visible rows.
+        for r in projections:
+            r['per_gw'][3]=2.0
+        state=ManagerState(1,tuple(range(1,16)),0,1,tuple((p,50) for p in range(1,16)),tuple((p,50) for p in range(1,16)))
+        v3=plan_multigw(state,players,projections,proj,planning_horizon=3,candidate_per_position=6,beam_width=60,max_transfers_per_gw=2,top_n=1,runtime_budget_seconds=5)
+        self.assertTrue(v3)
+        first=v3[0]['first_action']
+        v2_plan={'transfers':[{'out':t['out'],'in':t['in']} for t in first.get('transfers',[])], 'chip':None}
+        cb=evaluate_common_basis(v2_plan,v3[0],state,players,projections,proj,horizon=3,candidate_per_position=6,beam_width=40,max_transfers_per_gw=2,runtime_budget_seconds=5)
+        self.assertEqual(cb['status'],'available')
+        self.assertEqual(cb['evaluated_gws'],[1,2,3])
+        self.assertEqual(len(cb['v2_steps']),3)
+        self.assertEqual(len(cb['v3_steps']),3)
