@@ -14,21 +14,36 @@ def render_report(gw,kind,delivery,mode,plan,decision,players,proj,base_plan=Non
     if delivery=="sleep_safe":
         lines += ["- **Sleep-safe final:** sent before the 23:00 Beijing cutoff; overnight team news after this report is not included."]
     lines += [f"- **Confidence:** {decision['confidence']}",f"- {decision['executive_reasoning']}"]
+    # Beginner-friendly action card before any technical detail.
+    lu=plan.get("lineup") or {}
+    lines += ["", "## What to do"]
+    if mode=="gw1_initial_build":
+        lines.append("- Use the 15-player squad shown below.")
+    elif not plan.get("transfers"):
+        lines.append("- **Make no transfer (ROLL).** Save the free transfer for a later gameweek.")
+    else:
+        moves="; ".join(f"{player_name(t['out'],players)} → {player_name(t['in'],players)}" for t in plan.get("transfers",[]))
+        lines.append(f"- **Transfers:** {moves}")
+        lines.append(f"- **Points hit:** {'none' if not plan.get('hit_cost') else '-' + str(plan.get('hit_cost'))}")
+        lines.append(f"- **Money left in the bank:** {money(plan.get('bank_after',0))}")
+    if lu.get('captain') is not None:
+        lines.append(f"- **Captain:** {player_name(lu['captain'],players)}; **Vice-captain:** {player_name(lu['vice_captain'],players)}")
+    lines.append(f"- **Chips:** {'hold' if not plan.get('chip') else plan.get('chip').upper()}")
     if decision_audit:
-        lines += ["", "## Decision engine audit"]
-        lines.append(f"- Production optimizer: **{decision_audit.get('production_engine','unknown')}**")
+        lines += ["", "## Behind the scenes (optional)"]
+        lines.append(f"- Current weekly model: **{decision_audit.get('production_engine','unknown')}**")
         if decision_audit.get('decision_authority'):
             lines.append(f"- Decision authority: **{decision_audit['decision_authority'].upper()}** (AI cannot change the plan).")
         if decision_audit.get("shadow_engine"):
-            lines.append(f"- Shadow optimizer: **{decision_audit['shadow_engine']}**")
+            lines.append(f"- Future-planning check: **{decision_audit['shadow_engine']}** (advice only)")
         if decision_audit.get("captaincy_shadow_status"):
-            lines.append(f"- Probabilistic captaincy shadow: **{decision_audit['captaincy_shadow_status']}**")
+            lines.append(f"- Extra captaincy check: **{decision_audit['captaincy_shadow_status']}**")
             cs=decision_audit.get('captaincy_shadow') or {}
             cands=cs.get('candidates') or []
             pair_rank=cs.get('captain_pair_rankings') or []
             if cs.get('captain') is not None:
                 cap=next((x for x in cands if int(x.get('player_id',-1))==int(cs['captain'])),{})
-                lines.append(f"- V3 captaincy shadow: **{player_name(cs['captain'],players)} (C)** / **{player_name(cs['vice_captain'],players)} (VC)**; pair value {float(cs.get('pair_value',0)):.2f}, captain utility {float(cap.get('utility',0)):.2f}, P(0 min) {float(cap.get('p_zero',0))*100:.1f}%.")
+                lines.append(f"- Captaincy model's top pair: **{player_name(cs['captain'],players)} (C)** / **{player_name(cs['vice_captain'],players)} (VC)**; model score {float(cs.get('pair_value',0)):.2f}, chance captain gets 0 minutes {float(cap.get('p_zero',0))*100:.1f}%.")
                 if len(pair_rank)>1:
                     altp=pair_rank[1]
                     lines.append(f"- Next captain/vice pair: **{player_name(altp['captain'],players)} (C)** / **{player_name(altp['best_vice'],players)} (VC)**; pair value {float(altp.get('pair_value',0)):.2f}, captain utility {float(altp.get('captain_utility',0)):.2f}.")
@@ -38,7 +53,10 @@ def render_report(gw,kind,delivery,mode,plan,decision,players,proj,base_plan=Non
                     if prod:
                         rank=next((i+1 for i,x in enumerate(pair_rank) if int(x.get('captain',-1))==int(prod_cap)),None)
                         rank_text=f", pair-rank #{rank}" if rank else ""
-                        lines.append(f"- Production captain audit: **{player_name(prod_cap,players)}**; individual utility {float(prod.get('utility',0)):.2f}, P(0 min) {float(prod.get('p_zero',0))*100:.1f}%{rank_text}.")
+                        lines.append(f"- Chosen captain check: **{player_name(prod_cap,players)}**; captaincy-model score {float(prod.get('utility',0)):.2f}, chance of 0 minutes {float(prod.get('p_zero',0))*100:.1f}%{rank_text}.")
+                    pa=decision_audit.get('production_captain_audit') or {}
+                    if pa.get('reason'):
+                        lines.append(f"- Why the weekly model still captains {player_name(prod_cap,players)}: {pa['reason']}.")
         if decision_audit.get("agreement"):
             lines.append(f"- V2/V3 agreement: {decision_audit['agreement']}")
         if decision_audit.get("wc_fh_policy"):
@@ -71,7 +89,7 @@ def render_report(gw,kind,delivery,mode,plan,decision,players,proj,base_plan=Non
                 gws=cb.get('evaluated_gws') or []
                 gw_label=', '.join(f"GW{x}" for x in gws) if gws else f"{int(cb.get('horizon_gws') or 0)} GW"
                 lines.append(
-                    f"- Common-basis comparison ({gw_label}; probabilistic sequential objective): "
+                    f"- Same-gameweeks comparison ({gw_label}): "
                     f"V2 **{float(cb.get('v2_score') or 0):.2f}**, V3 **{float(cb.get('v3_score') or 0):.2f}**, "
                     f"V3−V2 **{delta:+.2f}**. First-GW common score: V2 **{float(cb.get('v2_first_gw_score') or 0):.2f}**, "
                     f"V3 **{float(cb.get('v3_first_gw_score') or 0):.2f}**."
@@ -81,17 +99,17 @@ def render_report(gw,kind,delivery,mode,plan,decision,players,proj,base_plan=Non
                     per=[]
                     for a,b in zip(v2_steps,v3_steps):
                         per.append(f"GW{a.get('gw')}: V2 {float(a.get('net_score') or 0):.2f} / V3 {float(b.get('net_score') or 0):.2f}")
-                    lines.append("- Common-basis per-GW net scores: **" + "; ".join(per) + "**.")
+                    lines.append("- Gameweek-by-gameweek model scores: **" + "; ".join(per) + "**.")
                 if cb.get('v2_bank_after_first') is not None and cb.get('v3_bank_after_first') is not None:
-                    lines.append(f"- Common-basis bank after first action: V2 **{money(cb['v2_bank_after_first'])}**, V3 **{money(cb['v3_bank_after_first'])}**.")
+                    lines.append(f"- Money left after the first move: weekly model **{money(cb['v2_bank_after_first'])}**, future-planning model **{money(cb['v3_bank_after_first'])}**.")
             else:
                 reason=cb.get('reason')
                 suffix=f" Reason: {reason}." if reason else ""
-                lines.append("- Native V2 optimizer score and V3 path score are **not directly comparable**; no valid equal-horizon common-basis route score was available for this run."+suffix)
+                lines.append("- The two model routes could not be compared fairly over the same gameweeks in this run."+suffix)
             if decision.get('v2_v3_explanation'):
                 lines.append(f"- Why they differ: {decision['v2_v3_explanation']}")
         if decision_audit.get("equivalence_band_points") is not None:
-            lines.append(f"- Near-tie policy: plans within **{float(decision_audit['equivalence_band_points']):.2f} pts** are treated as equivalent and resolved by robustness/flexibility rather than decimal score precision.")
+            lines.append(f"- Close-call rule: if plans are within **{float(decision_audit['equivalence_band_points']):.2f} projected points**, we treat them as too close to call and prefer the safer/more flexible option.")
     if mode=="gw1_initial_build":
         lines += ["","## Initial squad"]
         for pos in (1,2,3,4):
@@ -127,16 +145,17 @@ def render_report(gw,kind,delivery,mode,plan,decision,players,proj,base_plan=Non
             lines.append(f"- Bank after moves: **{money(plan['bank_after'])}**")
     signals=decision.get("transfer_signals") or []
     if signals and mode!="gw1_initial_build":
-        lines += ["", "## Transfer signal strength"]
+        lines += ["", "## How strong are the transfer signals?"]
+        lines.append("- **STRONG** means the move appears in most of the best plans; **MODERATE** means it appears fairly often; **WEAK** means there are several similar alternatives.")
         seen=set()
         for sig in signals:
             key=(sig.get('out'),sig.get('in'))
             if key in seen: continue
             seen.add(key)
             lines.append(
-                f"- {player_name(sig['out'],players)} → {player_name(sig['in'],players)}: **{sig.get('pair_strength','WEAK')}** replacement signal "
-                f"({sig.get('pair_frequency',0)*100:.0f}% of sampled top plans); selling {player_name(sig['out'],players)} is **{sig.get('sell_strength','WEAK')}** "
-                f"({sig.get('sell_frequency',0)*100:.0f}%)."
+                f"- {player_name(sig['out'],players)} → {player_name(sig['in'],players)}: **{sig.get('pair_strength','WEAK')}** choice "
+                f"(appears in {sig.get('pair_frequency',0)*100:.0f}% of the best sampled plans). Selling {player_name(sig['out'],players)} itself is **{sig.get('sell_strength','WEAK')}** "
+                f"({sig.get('sell_frequency',0)*100:.0f}% of those plans)."
             )
             if len(seen)>=5: break
     lu=plan["lineup"]
@@ -167,10 +186,10 @@ def render_report(gw,kind,delivery,mode,plan,decision,players,proj,base_plan=Non
                     f"preservation reserve **{item.get('preservation_reserve',0):.2f}**, "
                     f"net edge **{item.get('net_opportunity_edge',0):+.2f}**; confidence/news gate **{gate}**. Shadow only."
                 )
-    lines += ["","## Expected gain / projections"]
+    lines += ["","## Projected points"]
     if base_plan:
         gain=plan["metrics"]["weighted"]-base_plan["metrics"]["weighted"]-plan["hit_cost"]
-        lines.append(f"- Weighted gain versus no-action: **{gain:+.2f}** projected points")
+        lines.append(f"- Estimated advantage over making no transfer: **{gain:+.2f} points**")
     lines += [f"- GW+1: **{plan['metrics']['gw1']:.2f}**",f"- Next 3 GWs: **{plan['metrics']['gw3']:.2f}**",f"- Next 6 GWs: **{plan['metrics']['gw6']:.2f}**"]
     lines += ["","## Elite-manager signal",f"- {decision['elite_signal']}"]
     lines += ["","## Key news and minutes risks"]
@@ -181,7 +200,7 @@ def render_report(gw,kind,delivery,mode,plan,decision,players,proj,base_plan=Non
         lines.append(f"- Alternative optimizer plan: `{decision['alternative_plan_id']}`. See optimizer-plans.csv for exact comparison.")
     else:
         lines.append("- No close alternative identified.")
-    lines += ["","## Confidence / data quality",f"- Overall: **{decision['confidence']}**"]
+    lines += ["","## How much should you trust this?",f"- Overall confidence: **{decision['confidence']}**"]
     if decision.get("plan_separation_note"):
         lines.append(f"- {decision['plan_separation_note']}")
     if decision.get("news_status"):

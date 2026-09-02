@@ -14,6 +14,7 @@ from .projections import build_projections
 from .optimizer import initial_build_plans,managed_plans,plans_csv,plan_metrics
 from .multigw import ManagerState, plan_multigw
 from .captaincy import recommend_captaincy
+from .lineup import production_captain_audit
 from .elite import discover,summarize
 from .chips import opportunity_map,augment_with_chip_plans,evaluate_wc_fh_shadow
 from .decision import deterministic_decision, explanation_needed
@@ -160,6 +161,7 @@ def main():
         send_email(f"FPL GW{gw} recommendation withheld","# FPL Recommendation Withheld\n\n- Optimizer produced no legal plan.");return 3
 
     captaincy_shadow={}
+    production_cap_audit={}
     cap_cfg=cfg.get("captaincy",{})
     if plans and cap_cfg.get("probabilistic_shadow",False):
         try:
@@ -171,6 +173,11 @@ def main():
             )
         except Exception as exc:
             state.setdefault("warnings",[]).append(f"V3 probabilistic captaincy shadow unavailable: {exc}")
+    if plans:
+        try:
+            production_cap_audit=production_captain_audit(plans[0]["lineup"]["starters"],proj_by_id,gw)
+        except Exception as exc:
+            state.setdefault("warnings",[]).append(f"Production captain audit unavailable: {exc}")
     chip_map=opportunity_map(fixtures,teams,gw,cfg)
     plans=augment_with_chip_plans(plans,state,players,players_by_id,proj_by_id,gw,cfg,chip_map)
     v2_v3_comparison=compare_v2_v3(plans[0] if plans else None,multigw_shadow) if state["mode"] != "gw1_initial_build" else {"status":"not_applicable"}
@@ -236,6 +243,7 @@ def main():
             "shadow_engine":None,
             "captaincy_shadow_status":"available" if captaincy_shadow else "unavailable",
             "captaincy_shadow":captaincy_shadow,
+            "production_captain_audit":production_cap_audit,
             "agreement":"Legacy ILP is candidate generation only; final GW1 ranking is V3 probabilistic.",
             "wc_fh_policy":"HOLD in GW1; WC/FH shadow-only thereafter until sequential validation.",
             "decision_authority":"deterministic",
@@ -246,6 +254,7 @@ def main():
             "shadow_engine":"V3 multi-GW planner" if multigw_shadow else None,
             "captaincy_shadow_status":"available" if captaincy_shadow else "unavailable",
             "captaincy_shadow":captaincy_shadow,
+            "production_captain_audit":production_cap_audit,
             "agreement":(f"{v2_v3_comparison.get('label')}: production and V3 first actions " + ("agree." if v2_v3_comparison.get("same_first_action") else "differ; shadow remains advisory.")) if v2_v3_comparison.get("status")=="available" else "V3 comparison unavailable; production remains V2.",
             "v2_v3_comparison":v2_v3_comparison,
             "equivalence_band_points":float(cfg.get("optimizer",{}).get("near_tie_cluster_width_points",.75)),

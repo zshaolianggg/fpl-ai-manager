@@ -54,17 +54,20 @@ def gw_zero_probability(row, gw):
     return 1.0 - gw_appearance_probability(row, gw)
 
 
-def _captain(starters, proj_by_id, gw):
+def _captain_with_audit(starters, proj_by_id, gw):
     ranked = sorted(starters, key=lambda x: robust_points(proj_by_id[x[0]], gw), reverse=True)
     attackers = [x for x in ranked if proj_by_id[x[0]]["position"] in {3, 4}
                  and proj_by_id[x[0]].get("expected_minutes", 0) >= 65]
     best_attack = attackers[0] if attackers else ranked[0]
     top = ranked[0]
+    raw_top = top
+    reason = "highest risk-adjusted projected points"
     if proj_by_id[top[0]]["position"] in {1, 2}:
         conf = proj_by_id[top[0]].get("confidence", "LOW")
         margin = 2.5 if conf == "LOW" else 1.5
         if robust_points(proj_by_id[top[0]], gw) < robust_points(proj_by_id[best_attack[0]], gw) + margin:
             top = best_attack
+            reason = "attacker safety rule: a defender/GK did not have a big enough edge to justify the armband"
     premium_attackers = [x for x in attackers if proj_by_id[x[0]].get("price", 0) >= 120]
     if premium_attackers:
         eo_anchor = max(premium_attackers, key=lambda x: _ownership(proj_by_id[x[0]]))
@@ -73,9 +76,25 @@ def _captain(starters, proj_by_id, gw):
             edge = robust_points(proj_by_id[top[0]], gw) - robust_points(anchor_row, gw)
             if edge < 1.25:
                 top = eo_anchor
+                reason = "low-confidence premium-anchor rule: the projected edge over the premium attacker was too small to justify extra captaincy risk"
     remaining_attackers = [x for x in attackers if x[0] != top[0]]
     vice = remaining_attackers[0] if remaining_attackers else next(x for x in ranked if x[0] != top[0])
+    audit = {
+        "captain": int(top[0]), "vice_captain": int(vice[0]), "reason": reason,
+        "raw_top": int(raw_top[0]),
+        "captain_robust_points": round(robust_points(proj_by_id[top[0]], gw), 3),
+        "raw_top_robust_points": round(robust_points(proj_by_id[raw_top[0]], gw), 3),
+    }
+    return top, vice, audit
+
+def _captain(starters, proj_by_id, gw):
+    top, vice, _ = _captain_with_audit(starters, proj_by_id, gw)
     return top, vice
+
+def production_captain_audit(starter_ids, proj_by_id, gw):
+    starters=[(int(pid), robust_points(proj_by_id[int(pid)], gw)) for pid in starter_ids]
+    _, _, audit = _captain_with_audit(starters, proj_by_id, gw)
+    return audit
 
 
 def _poisson_binomial(probs):

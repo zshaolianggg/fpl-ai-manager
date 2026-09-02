@@ -72,13 +72,13 @@ def deterministic_decision(plans, cfg, *, v2_v3=None, news=None, elite=None):
     inside=sep <= eq
     if inside:
         reason=(
-            f"The top plans are inside the {eq:.2f}-point equivalence band, so their numerical gap is treated as noise. "
-            "The production plan is the deterministic robustness/flexibility winner after considering bank, hits, minutes security and squad structure."
+            "The best options are too close to separate confidently on projected points. "
+            "This plan is preferred because it keeps the safer overall setup: no unnecessary hit, useful money in the bank, and good flexibility for the next move."
         )
     else:
         reason=(
-            f"The deterministic production optimizer selects rank #1 with a {sep:.2f}-point lead over the next plan; "
-            "no AI plan selection is used."
+            f"This plan has a clearer projected advantage over the next option ({sep:.2f} points in the model). "
+            "The choice is made by the FPL model; AI is only used to explain it when helpful."
         )
     chip=chosen.get('chip')
     if chip:

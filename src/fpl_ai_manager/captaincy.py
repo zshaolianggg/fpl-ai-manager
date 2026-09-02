@@ -41,12 +41,18 @@ def gw_distribution(row: dict, gw: int) -> dict:
         for p in p10plus_components:
             p10plus *= 1.0-max(0.0, min(1.0, p))
         p10plus = 1.0-p10plus
+        pret_components = [float((f.get("projection") or {}).get("p_return") or 0.0) for f in fixtures]
+        p_return = 1.0
+        for p in pret_components:
+            p_return *= 1.0-max(0.0, min(1.0, p))
+        p_return = 1.0-p_return
     else:
         variance = max(1.0, 1.8*mean)
         sd = sqrt(variance)
         p10 = max(0.0, mean-1.2816*sd)
         p90 = mean+1.2816*sd
         p10plus = max(0.0, min(1.0, mean/18.0))
+        p_return = max(0.0, min(1.0, mean/10.0))
     return {
         "mean": mean,
         "variance": max(0.0, variance),
@@ -54,6 +60,7 @@ def gw_distribution(row: dict, gw: int) -> dict:
         "p10": p10,
         "p90": p90,
         "p_10_plus": max(0.0, min(1.0, p10plus)),
+        "p_return": max(0.0, min(1.0, p_return)),
         "p_appearance": appearance_probability(row, gw),
         "p_zero": 1.0-appearance_probability(row, gw),
     }
@@ -67,6 +74,8 @@ class CaptaincyCandidate:
     p90: float
     variance: float
     p_10_plus: float
+    p_return: float
+    attacking_rate: float
     p_appearance: float
     p_zero: float
     utility: float
@@ -75,23 +84,31 @@ class CaptaincyCandidate:
         return asdict(self)
 
 
-def candidate(row: dict, gw: int, *, downside_penalty: float = 0.08, upside_bonus: float = 0.03) -> CaptaincyCandidate:
+def candidate(row: dict, gw: int, *, downside_penalty: float = 0.08, upside_bonus: float = 0.03,
+              haul_bonus: float = 0.35, return_bonus: float = 0.20, attacking_rate_bonus: float = 0.15) -> CaptaincyCandidate:
     d = gw_distribution(row, gw)
-    # Expected points remains dominant. Risk terms are deliberately bounded.
+    attacking_rate = max(0.0, float(row.get("xg90") or 0.0) + float(row.get("xa90") or 0.0))
+    # Expected points stays dominant. Captaincy gets only a bounded preference
+    # for genuine attacking/haul upside because the armband doubles that upside.
     utility = d["mean"] - downside_penalty*d["sd"] + upside_bonus*max(0.0, d["p90"]-d["mean"])
-    # Availability penalty is small because zero-minute probability is already
-    # reflected in the expected-points projection; this only breaks close ties.
+    utility += haul_bonus*d["p_10_plus"] + return_bonus*d["p_return"] + attacking_rate_bonus*min(1.5, attacking_rate)
+    # Zero-minute risk is already in mean EP; this is a small tie-break only.
     utility -= 0.20*d["p_zero"]
     return CaptaincyCandidate(
         player_id=int(row["player_id"]), mean=round(d["mean"], 4), p10=round(d["p10"], 4),
         p90=round(d["p90"], 4), variance=round(d["variance"], 4), p_10_plus=round(d["p_10_plus"], 4),
+        p_return=round(d["p_return"], 4), attacking_rate=round(attacking_rate, 4),
         p_appearance=round(d["p_appearance"], 4), p_zero=round(d["p_zero"], 4), utility=round(utility, 4),
     )
 
 
 def captain_pair_value(cap: CaptaincyCandidate, vice: CaptaincyCandidate, *, triple_captain: bool = False) -> float:
-    # Captaincy adds one extra copy of captain points; TC adds two. If captain
-    # records zero minutes, the same multiplier moves to vice-captain.
+    # Use calibrated captain utility for ranking, with vice value only when the
+    # captain records zero minutes. Expected-extra-points is reported separately.
+    multiplier = 2 if triple_captain else 1
+    return multiplier*(cap.utility + cap.p_zero*vice.utility)
+
+def captain_pair_expected_points(cap: CaptaincyCandidate, vice: CaptaincyCandidate, *, triple_captain: bool = False) -> float:
     multiplier = 2 if triple_captain else 1
     return multiplier*(cap.mean + cap.p_zero*vice.mean)
 
@@ -150,7 +167,7 @@ def recommend_captaincy(
     return {
         "captain": cap_id,
         "vice_captain": vice_id,
-        "expected_extra_points": round(captain_pair_value(candidates[cap_id], candidates[vice_id], triple_captain=triple_captain), 3),
+        "expected_extra_points": round(captain_pair_expected_points(candidates[cap_id], candidates[vice_id], triple_captain=triple_captain), 3),
         "pair_value": round(value, 3),
         "candidates": [x.as_dict() for x in ranking],
         "captain_pair_rankings": pair_ranking,
