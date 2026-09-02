@@ -180,12 +180,18 @@
     "bulk_fpl_retries": 1,
     "bulk_fpl_workers": 10,
     "elite_discovery_budget_seconds": 75,
-    "elite_signal_budget_seconds": 60,
-    "openai_decision_timeout_seconds": 60
+    "elite_signal_budget_seconds": 60
   },
   "backtest": {
     "enabled": true,
     "snapshot_dir": ".state/backtest",
     "schema_version": 1
+  },
+  "ai": {
+    "decision_authority": false,
+    "explanation_enabled": true,
+    "explanation_mode": "complex_only",
+    "explanation_model": "gpt-5-mini",
+    "explanation_timeout_seconds": 25
   }
 }

@@ -1,0 +1,48 @@
+from fpl_ai_manager.decision import deterministic_decision, explanation_needed, transfer_signal_summary
+from fpl_ai_manager.explainer import build_explanation_packet
+from fpl_ai_manager.render import render_report
+
+
+def _plans():
+    base_lu={'starters':list(range(1,12)),'bench':[12,13,14,15],'captain':1,'vice_captain':2}
+    return [
+        {'plan_id':'p1','optimizer_score':100.0,'bank_after':25,'hit_cost':0,'chip':None,'transfers':[{'out':20,'in':30,'sell':45,'buy':40},{'out':21,'in':31,'sell':65,'buy':60}],
+         'lineup':base_lu,'metrics':{'gw1':55,'gw3':165,'gw6':330,'weighted':148},'within_equivalence_band':True,'equivalence_tiebreak':1.2,'squad_ids':list(range(1,16))},
+        {'plan_id':'p2','optimizer_score':99.6,'bank_after':15,'hit_cost':0,'chip':None,'transfers':[{'out':20,'in':32,'sell':45,'buy':50},{'out':21,'in':31,'sell':65,'buy':60}],
+         'lineup':base_lu,'metrics':{'gw1':55,'gw3':164,'gw6':329,'weighted':147.5},'within_equivalence_band':True,'equivalence_tiebreak':1.0,'squad_ids':list(range(1,16))},
+    ]
+
+
+def test_deterministic_decision_always_selects_preordered_rank_one():
+    cfg={'alternative_margin_points':2.0,'optimizer':{'near_tie_cluster_width_points':.75},'ai':{'explanation_mode':'complex_only'}}
+    d=deterministic_decision(_plans(),cfg,v2_v3={'label':'DIFFERENT_ROUTE'},news={'status':'DEGRADED'},elite={})
+    assert d['plan_id']=='p1'
+    assert d['decision_authority']=='deterministic'
+    assert d['alternative_plan_id']=='p2'
+
+
+def test_complex_only_explanation_runs_for_near_tie_but_not_clear_week():
+    cfg={'ai':{'explanation_mode':'complex_only'}}
+    assert explanation_needed({'equivalence_band':True},v2_v3={'label':'AGREE'},news={'items':[]},chosen={'hit_cost':0},cfg=cfg)
+    assert not explanation_needed({'equivalence_band':False},v2_v3={'label':'AGREE'},news={'items':[]},chosen={'hit_cost':0},cfg=cfg)
+
+
+def test_explanation_packet_uses_player_names_for_routes():
+    players={i:{'web_name':f'P{i}'} for i in range(1,40)}
+    d=deterministic_decision(_plans(),{'alternative_margin_points':2,'optimizer':{'near_tie_cluster_width_points':.75}},news={},elite={})
+    comp={'status':'available','label':'DIFFERENT_ROUTE','v2_transfers':[{'out':20,'in':30}],'v3_transfers':[{'out':20,'in':32}], 'v2_roll':False,'v3_roll':False}
+    packet=build_explanation_packet(_plans()[0],_plans()[1],d,comp,players,{'status':'OK','items':[]},{})
+    assert packet['selected']['transfers'][0]['out']=='P20'
+    assert packet['v2_v3']['v3_transfers_named'][0]['in']=='P32'
+    assert 'v3_first_action' not in packet['v2_v3']
+
+
+def test_transfer_signal_distinguishes_sell_consensus_from_replacement():
+    plans=_plans()+[
+        {**_plans()[0],'plan_id':'p3','transfers':[{'out':20,'in':33},{'out':21,'in':31}]},
+        {**_plans()[0],'plan_id':'p4','transfers':[{'out':20,'in':34}]},
+    ]
+    sig=transfer_signal_summary(plans,top_n=4)
+    row=next(x for x in sig if x['out']==20 and x['in']==30)
+    assert row['sell_strength']=='STRONG'
+    assert row['pair_strength']=='WEAK'

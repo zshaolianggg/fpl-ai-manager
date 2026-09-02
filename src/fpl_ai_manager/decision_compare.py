@@ -32,6 +32,17 @@ def compare_v2_v3(v2_plan, v3_paths):
         label="MATERIAL_DISAGREEMENT"
     else:
         label="DIFFERENT_ROUTE"
+    future_steps=[]
+    for step in (v3.get("steps") or [])[:3]:
+        tx=[]
+        for t in step.get("transfers",[]) or []:
+            incoming=t.get("in") if t.get("in") is not None else t.get("in_")
+            if incoming is not None:
+                tx.append({"out":int(t["out"]),"in":int(incoming)})
+        future_steps.append({
+            "gw":step.get("gw"),"transfers":tx,"roll":bool(step.get("roll")),"chip":step.get("chip"),
+            "hit_cost":step.get("hit_cost"),"bank_after":step.get("bank_after"),"free_transfers_after":step.get("free_transfers_after"),
+        })
     return {
         "status":"available",
         "label":label,
@@ -43,6 +54,7 @@ def compare_v2_v3(v2_plan, v3_paths):
         "v3_path_score":v3.get("score"),
         "v3_transfers":[{"out":a,"in":b} for a,b in v3_tx],
         "v3_roll":v3_roll,"v3_chip":v3_chip,
+        "v3_future_steps":future_steps,
         "v3_first_action":first,
         "v3_planner_diagnostics":v3.get("planner_diagnostics"),
     }

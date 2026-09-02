@@ -16,7 +16,8 @@ from .multigw import ManagerState, plan_multigw
 from .captaincy import recommend_captaincy
 from .elite import discover,summarize
 from .chips import opportunity_map,augment_with_chip_plans,evaluate_wc_fh_shadow
-from .ai import decide,audit_text
+from .decision import deterministic_decision, explanation_needed
+from .explainer import build_explanation_packet, explain
 from .validator import validate_plan
 from .render import render_report
 from .emailer import send_email
@@ -216,63 +217,31 @@ def main():
             "production_engine":"V3 GW1 probabilistic/structural reranker",
             "shadow_engine":None,
             "captaincy_shadow_status":"available" if captaincy_shadow else "unavailable",
+            "captaincy_shadow":captaincy_shadow,
             "agreement":"Legacy ILP is candidate generation only; final GW1 ranking is V3 probabilistic.",
             "wc_fh_policy":"HOLD in GW1; WC/FH shadow-only thereafter until sequential validation.",
+            "decision_authority":"deterministic",
         }
     else:
         decision_audit={
             "production_engine":"V2 managed optimizer",
             "shadow_engine":"V3 multi-GW planner" if multigw_shadow else None,
             "captaincy_shadow_status":"available" if captaincy_shadow else "unavailable",
+            "captaincy_shadow":captaincy_shadow,
             "agreement":(f"{v2_v3_comparison.get('label')}: production and V3 first actions " + ("agree." if v2_v3_comparison.get("same_first_action") else "differ; shadow remains advisory.")) if v2_v3_comparison.get("status")=="available" else "V3 comparison unavailable; production remains V2.",
             "v2_v3_comparison":v2_v3_comparison,
             "equivalence_band_points":float(cfg.get("optimizer",{}).get("near_tie_cluster_width_points",.75)),
             "wc_fh_policy":"Wildcard/Free Hit are shadow-only and cannot be selected by production.",
+            "decision_authority":"deterministic",
         }
-    payload={"mode":state["mode"],"report_type":kind,"delivery_mode":delivery,"gameweek":gw,
-      "objective":cfg["objective"],"risk_profile":cfg["risk_profile"],"state":state,
-      "optimizer_plans":[compact_plan(p,i+1) for i,p in enumerate(plans)],"projection_evidence":pe,
-      "multigw_shadow":multigw_shadow,"v2_v3_comparison":v2_v3_comparison,"captaincy_shadow":captaincy_shadow,"decision_audit":decision_audit,"elite_signal":elite,"chip_opportunities":chip_map,"news":news,
-      "warnings":state.get("warnings",[])+warn_news+warn_stats+warn_elite,
-      "policy":{"projection_weights":cfg["projection_weights"],
-                "bench_valuation":"probabilistic auto-sub-aware" if state["mode"]=="gw1_initial_build" else f"legacy managed weight {cfg['bench_weight']}",
-                "wildcard_freehit":"shadow_only; never selectable from optimizer_plans",
-                "ai_override_margin":cfg["ai_override_margin_points"],"alternative_margin":cfg["alternative_margin_points"]}}
-    if not budget.can_spend(float(runtime_cfg.get("openai_decision_timeout_seconds",90)), reserve=60):
-        state.setdefault("warnings",[]).append("Runtime budget low; using deterministic optimizer rank #1 without final AI tie-break.")
-        decision={"plan_id":plans[0]["plan_id"],"alternative_plan_id":plans[1]["plan_id"] if len(plans)>1 else None,"confidence":"LOW","executive_reasoning":"Runtime budget guard activated; deterministic optimizer rank #1 selected.","elite_signal":"Runtime guard; elite remains secondary.","chip_reasoning":"Deterministic chip plan retained.","news_summary":[],"risks":["Optional AI adjudication skipped to guarantee delivery before workflow timeout."]}
-    else:
-        with stage("openai_adjudication"):
-            decision,_=decide(payload,os.getenv("OPENAI_MODEL","gpt-5"),timeout=runtime_cfg.get("openai_decision_timeout_seconds",90))
+
+    # Production plan selection is now fully deterministic. cluster_sort() has
+    # already resolved near-ties using robustness/flexibility; AI is optional
+    # explanation only and cannot modify the selected plan.
+    decision=deterministic_decision(plans,cfg,v2_v3=v2_v3_comparison,news=news,elite=elite)
     lookup={p["plan_id"]:p for p in plans}
-    if decision["plan_id"] not in lookup:
-        send_email(f"FPL GW{gw} recommendation withheld","# FPL Recommendation Withheld\n\n- AI selected an unknown optimizer plan.");return 4
-    chosen=lookup[decision["plan_id"]];top=plans[0]
-    if chosen.get("chip") not in {"wildcard","freehit"} and chip_map.get("wildcard_freehit_shadow"):
-        prefix="Wildcard and Free Hit are shadow-only in this build and were not eligible for production selection. "
-        if not str(decision.get("chip_reasoning","")).startswith(prefix):
-            decision["chip_reasoning"]=prefix+str(decision.get("chip_reasoning","")).strip()
-    gap=top["optimizer_score"]-chosen["optimizer_score"]
-    material_news=any(i.get("confidence") in {"HIGH","MEDIUM"} and i.get("status") in {"ruled_out","major_doubt","rotation_risk"} for i in news.get("items",[]))
-    all_low=all(r.get("confidence")=="LOW" for r in projections if r["player_id"] in set(top["squad_ids"]))
-    if all_low and not material_news and chosen["plan_id"] != top["plan_id"]:
-        chosen=top
-        decision["plan_id"]=top["plan_id"]
-        decision["executive_reasoning"]="All relevant GW1 projections are LOW confidence and no material HIGH/MEDIUM news is available, so the deterministic optimizer rank #1 is used rather than allowing an AI tie-break override."
-        gap=0.0
-    if gap>cfg["ai_override_margin_points"] and not material_news:
-        send_email(f"FPL GW{gw} recommendation withheld",f"# FPL Recommendation Withheld\n\n- AI override exceeded {cfg['ai_override_margin_points']} points without material news.");return 5
-
-    recompute_mode="probabilistic" if chosen.get("optimizer_engine")=="V3_GW1_PROBABILISTIC_RERANK" else "robust"
-    recompute_bench=0.0 if recompute_mode=="probabilistic" else cfg["bench_weight"]
-    recomputed=plan_metrics(chosen["squad_ids"],proj_by_id,gw,cfg["projection_weights"],recompute_bench,chip=chosen.get("chip"),selection_mode=recompute_mode)
-    errors=validate_plan(chosen,players_by_id,proj_by_id,state,gw,recomputed)
-    if errors:
-        send_email(f"FPL GW{gw} recommendation withheld","# FPL Recommendation Withheld\n\n"+"\n".join(f"- {e}" for e in errors));return 6
-
-    alt=decision.get("alternative_plan_id")
-    if alt not in lookup:decision["alternative_plan_id"]=None
-    elif abs(chosen["optimizer_score"]-lookup[alt]["optimizer_score"])>cfg["alternative_margin_points"]:decision["alternative_plan_id"]=None
+    chosen=lookup[decision["plan_id"]]
+    top=plans[0]
 
     sorted_scores=sorted((p["optimizer_score"] for p in plans),reverse=True)
     sep=(sorted_scores[0]-sorted_scores[1]) if len(sorted_scores)>1 else 9
@@ -283,18 +252,60 @@ def main():
     else:
         decision["plan_separation_note"]=f"Optimizer separation between the top two plans: {sep:.2f} points."
     decision["news_status"]=news.get("status","OK")
+
+    # Optional, low-cost explanation pass. It receives only the already-final
+    # recommendation plus compact comparison facts. Failure never affects the
+    # selected plan or delivery.
+    ai_cfg=cfg.get("ai",{})
+    decision["ai_explanation_used"]=False
+    if ai_cfg.get("explanation_enabled",True) and explanation_needed(decision,v2_v3=v2_v3_comparison,news=news,chosen=chosen,cfg=cfg):
+        if budget.can_spend(float(ai_cfg.get("explanation_timeout_seconds",25)),reserve=45):
+            try:
+                with stage("ai_explanation"):
+                    alt_plan=lookup.get(decision.get("alternative_plan_id"))
+                    exp_packet=build_explanation_packet(chosen,alt_plan,decision,v2_v3_comparison,players_by_id,news,wc_fh_shadow)
+                    exp,_=explain(exp_packet,model=os.getenv("OPENAI_EXPLANATION_MODEL") or ai_cfg.get("explanation_model"),timeout=float(ai_cfg.get("explanation_timeout_seconds",25)))
+                if exp:
+                    decision["executive_reasoning"]=exp.get("executive_reasoning") or decision["executive_reasoning"]
+                    if exp.get("v2_v3_note"):
+                        decision["v2_v3_explanation"]=exp["v2_v3_note"]
+                    if exp.get("risk_note"):
+                        decision.setdefault("risks",[]).append(exp["risk_note"])
+                    decision["ai_explanation_used"]=True
+            except Exception as exc:
+                state.setdefault("warnings",[]).append(f"Optional AI explanation unavailable: {exc}")
+        else:
+            state.setdefault("warnings",[]).append("Optional AI explanation skipped by runtime guard; deterministic report retained.")
+
+    payload={"mode":state["mode"],"report_type":kind,"delivery_mode":delivery,"gameweek":gw,
+      "objective":cfg["objective"],"risk_profile":cfg["risk_profile"],"state":state,
+      "optimizer_plans":[compact_plan(p,i+1) for i,p in enumerate(plans)],"projection_evidence":pe,
+      "multigw_shadow":multigw_shadow,"v2_v3_comparison":v2_v3_comparison,"captaincy_shadow":captaincy_shadow,"decision_audit":decision_audit,"elite_signal":elite,"chip_opportunities":chip_map,"news":news,
+      "warnings":state.get("warnings",[])+warn_news+warn_stats+warn_elite,
+      "policy":{"projection_weights":cfg["projection_weights"],
+                "bench_valuation":"probabilistic auto-sub-aware" if state["mode"]=="gw1_initial_build" else f"legacy managed weight {cfg['bench_weight']}",
+                "wildcard_freehit":"shadow_only; never selectable from optimizer_plans",
+                "decision_authority":"deterministic","ai_role":"optional explanation only","alternative_margin":cfg["alternative_margin_points"]}}
+
+    recompute_mode="probabilistic" if chosen.get("optimizer_engine")=="V3_GW1_PROBABILISTIC_RERANK" else "robust"
+    recompute_bench=0.0 if recompute_mode=="probabilistic" else cfg["bench_weight"]
+    recomputed=plan_metrics(chosen["squad_ids"],proj_by_id,gw,cfg["projection_weights"],recompute_bench,chip=chosen.get("chip"),selection_mode=recompute_mode)
+    errors=validate_plan(chosen,players_by_id,proj_by_id,state,gw,recomputed)
+    if errors:
+        send_email(f"FPL GW{gw} recommendation withheld","# FPL Recommendation Withheld\n\n"+"\n".join(f"- {e}" for e in errors));return 6
+
     body=render_report(gw,kind,delivery,state["mode"],chosen,decision,players_by_id,proj_by_id,base,chip_map,elite,news,decision_audit=decision_audit)
     evidence={"generated_at":datetime.now(timezone.utc).isoformat(),"gameweek":gw,"state":state,"news":news,
       "sources":[{"url":x.get("source_url"),"title":x.get("source_title"),"timestamp":x.get("published_at"),"tier":x.get("source_tier"),"confidence":x.get("confidence"),"claim":x.get("claim")} for x in news.get("items",[])],
       "external_stats_provider":external.get("provider"),"projection_model":{"type":"component model","weights":cfg["projection_weights"],
       "bench_valuation":"probabilistic auto-sub-aware" if state["mode"]=="gw1_initial_build" else f"legacy managed weight {cfg['bench_weight']}"},
-      "projections":projections,"multigw_shadow":multigw_shadow,"v2_v3_comparison":v2_v3_comparison,"captaincy_shadow":captaincy_shadow,"decision_audit":decision_audit,"elite":elite,"chip_opportunities":chip_map,"selected_plan":compact_plan(chosen),"warnings":payload["warnings"]}
+      "projections":projections,"multigw_shadow":multigw_shadow,"v2_v3_comparison":v2_v3_comparison,"captaincy_shadow":captaincy_shadow,"decision_audit":decision_audit,"decision":decision,"elite":elite,"chip_opportunities":chip_map,"selected_plan":compact_plan(chosen),"warnings":payload["warnings"]}
     try:
         snap_now=datetime.now(timezone.utc).isoformat()
         snapshot={
           "schema_version":1,"generated_at":snap_now,"deadline":nxt.get("deadline_time"),"gameweek":gw,"report_type":kind,
           "state":state,"players_by_id":players_by_id,"projections":projections,"config":cfg,
-          "v2_plans":[compact_plan(p,i+1) for i,p in enumerate(plans)],"v3_paths":multigw_shadow,"v2_v3_comparison":v2_v3_comparison,
+          "v2_plans":[compact_plan(p,i+1) for i,p in enumerate(plans)],"selected_plan":compact_plan(chosen),"decision":decision,"v3_paths":multigw_shadow,"v2_v3_comparison":v2_v3_comparison,
           "evidence":[{"kind":"news","published_at":x.get("published_at"),"source":x.get("source_url")} for x in news.get("items",[]) if x.get("published_at")]
                     + [{"kind":"official_fpl","observed_at":snap_now},{"kind":"external_stats","observed_at":snap_now}],
         }
@@ -302,7 +313,7 @@ def main():
     except Exception as exc:
         state.setdefault("warnings",[]).append(f"Backtest snapshot not written: {exc}")
 
-    attachments=[(f"fpl-gw{gw}-openai-prompt.txt",audit_text(payload),"text/plain"),
+    attachments=[(f"fpl-gw{gw}-decision-audit.json",json.dumps({"decision":decision,"decision_audit":decision_audit,"v2_v3_comparison":v2_v3_comparison},indent=2,default=str),"application/json"),
       (f"fpl-gw{gw}-evidence-pack.json",json.dumps(evidence,indent=2,default=str),"application/json"),
       (f"fpl-gw{gw}-optimizer-plans.csv",plans_csv(plans,players_by_id),"text/csv")]
     subject=f"FPL GW{gw} {'Sleep-safe Final' if delivery=='sleep_safe' else kind.title()} Recommendation"

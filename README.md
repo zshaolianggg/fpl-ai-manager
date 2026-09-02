@@ -174,3 +174,9 @@ Near-tied production plans (default band: 0.75 points) are treated as equivalent
 Every due run also attempts to store a frozen pre-deadline replay snapshot in `.state/backtest/`. These snapshots can be replayed without network access using `scripts/backtest_replay.py`; evidence timestamped after the recorded deadline is rejected by the leakage guard.
 
 See `V3_BUILD_NOTES_ALPHA5.md` for details.
+
+## Alpha 6 decision architecture
+
+As of `3.0.0a6`, OpenAI is no longer a production decision-maker. The optimizer and deterministic equivalence/flexibility policy choose the final plan, which is then validated before delivery. An optional compact AI call may explain complex decisions, but its schema contains prose only and it cannot alter the selected action.
+
+Set `ai.explanation_mode` to `complex_only` (default), `always`, or `off`. Use `OPENAI_EXPLANATION_MODEL` to choose a separate lower-cost explanation model.

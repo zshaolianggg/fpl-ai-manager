@@ -17,10 +17,22 @@ def render_report(gw,kind,delivery,mode,plan,decision,players,proj,base_plan=Non
     if decision_audit:
         lines += ["", "## Decision engine audit"]
         lines.append(f"- Production optimizer: **{decision_audit.get('production_engine','unknown')}**")
+        if decision_audit.get('decision_authority'):
+            lines.append(f"- Decision authority: **{decision_audit['decision_authority'].upper()}** (AI cannot change the plan).")
         if decision_audit.get("shadow_engine"):
             lines.append(f"- Shadow optimizer: **{decision_audit['shadow_engine']}**")
         if decision_audit.get("captaincy_shadow_status"):
             lines.append(f"- Probabilistic captaincy shadow: **{decision_audit['captaincy_shadow_status']}**")
+            cs=decision_audit.get('captaincy_shadow') or {}
+            cands=cs.get('candidates') or []
+            if cs.get('captain') is not None:
+                cap=next((x for x in cands if int(x.get('player_id',-1))==int(cs['captain'])),{})
+                vice=next((x for x in cands if int(x.get('player_id',-1))==int(cs.get('vice_captain',-1))),{})
+                lines.append(f"- V3 captaincy shadow: **{player_name(cs['captain'],players)} (C)** / **{player_name(cs['vice_captain'],players)} (VC)**; captain utility {float(cap.get('utility',0)):.2f}, P(0 min) {float(cap.get('p_zero',0))*100:.1f}%.")
+                if len(cands)>1:
+                    altc=next((x for x in cands if int(x.get('player_id',-1))!=int(cs['captain'])),None)
+                    if altc:
+                        lines.append(f"- Next captain candidate: **{player_name(altc['player_id'],players)}**, utility {float(altc.get('utility',0)):.2f}.")
         if decision_audit.get("agreement"):
             lines.append(f"- V2/V3 agreement: {decision_audit['agreement']}")
         if decision_audit.get("wc_fh_policy"):
@@ -30,6 +42,25 @@ def render_report(gw,kind,delivery,mode,plan,decision,players,proj,base_plan=Non
             v2_action="ROLL" if comp.get("v2_roll") else f"{len(comp.get('v2_transfers',[]))} transfer(s)"
             v3_action="ROLL" if comp.get("v3_roll") else f"{len(comp.get('v3_transfers',[]))} transfer(s)"
             lines.append(f"- V2 first action: **{v2_action}**; V3 shadow first action: **{v3_action}**; comparison: **{comp.get('label')}**.")
+            if comp.get('v2_transfers'):
+                named='; '.join(f"{player_name(t['out'],players)} → {player_name(t['in'],players)}" for t in comp['v2_transfers'])
+                lines.append(f"- V2 route: **{named}**")
+            elif comp.get('v2_roll'):
+                lines.append("- V2 route: **ROLL**")
+            if comp.get('v3_transfers'):
+                named='; '.join(f"{player_name(t['out'],players)} → {player_name(t['in'],players)}" for t in comp['v3_transfers'])
+                lines.append(f"- V3 shadow route: **{named}**")
+            elif comp.get('v3_roll'):
+                lines.append("- V3 shadow route: **ROLL**")
+            future=(comp.get('v3_future_steps') or [])[1:3]
+            for step in future:
+                if step.get('transfers'):
+                    named='; '.join(f"{player_name(t['out'],players)} → {player_name(t['in'],players)}" for t in step['transfers'])
+                    lines.append(f"- V3 shadow GW{step.get('gw')} continuation: **{named}**")
+                elif step.get('roll'):
+                    lines.append(f"- V3 shadow GW{step.get('gw')} continuation: **ROLL**")
+            if decision.get('v2_v3_explanation'):
+                lines.append(f"- Why they differ: {decision['v2_v3_explanation']}")
         if decision_audit.get("equivalence_band_points") is not None:
             lines.append(f"- Near-tie policy: plans within **{float(decision_audit['equivalence_band_points']):.2f} pts** are treated as equivalent and resolved by robustness/flexibility rather than decimal score precision.")
     if mode=="gw1_initial_build":
@@ -65,6 +96,20 @@ def render_report(gw,kind,delivery,mode,plan,decision,players,proj,base_plan=Non
                 lines.append(f"- {player_name(t['out'],players)} → **{player_name(t['in'],players)}** ({money(t['sell'])} sold / {money(t['buy'])} bought)")
             lines.append(f"- Hit cost: **-{plan['hit_cost']}**" if plan["hit_cost"] else "- Hit cost: **0**")
             lines.append(f"- Bank after moves: **{money(plan['bank_after'])}**")
+    signals=decision.get("transfer_signals") or []
+    if signals and mode!="gw1_initial_build":
+        lines += ["", "## Transfer signal strength"]
+        seen=set()
+        for sig in signals:
+            key=(sig.get('out'),sig.get('in'))
+            if key in seen: continue
+            seen.add(key)
+            lines.append(
+                f"- {player_name(sig['out'],players)} → {player_name(sig['in'],players)}: **{sig.get('pair_strength','WEAK')}** replacement signal "
+                f"({sig.get('pair_frequency',0)*100:.0f}% of sampled top plans); selling {player_name(sig['out'],players)} is **{sig.get('sell_strength','WEAK')}** "
+                f"({sig.get('sell_frequency',0)*100:.0f}%)."
+            )
+            if len(seen)>=5: break
     lu=plan["lineup"]
     lines += ["","## Starting XI"]
     for pid in lu["starters"]:
@@ -112,5 +157,6 @@ def render_report(gw,kind,delivery,mode,plan,decision,players,proj,base_plan=Non
         lines.append(f"- {decision['plan_separation_note']}")
     if decision.get("news_status"):
         lines.append(f"- News research status: **{decision['news_status']}**")
-    lines.append("- Exact legality, affordability, lineup, chip eligibility and projection arithmetic were recomputed after AI selection.")
+    lines.append(f"- AI explanation: **{'USED (explanation only)' if decision.get('ai_explanation_used') else 'NOT NEEDED / NOT AVAILABLE'}**")
+    lines.append("- Exact legality, affordability, lineup, chip eligibility and projection arithmetic were validated after deterministic selection.")
     return "\n".join(lines)
