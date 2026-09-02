@@ -1,3 +1,4 @@
+import unittest
 from fpl_ai_manager.decision import deterministic_decision, explanation_needed, transfer_signal_summary
 from fpl_ai_manager.explainer import build_explanation_packet
 from fpl_ai_manager.render import render_report
@@ -46,3 +47,26 @@ def test_transfer_signal_distinguishes_sell_consensus_from_replacement():
     row=next(x for x in sig if x['out']==20 and x['in']==30)
     assert row['sell_strength']=='STRONG'
     assert row['pair_strength']=='WEAK'
+
+class TestAlpha6Post1Corrections(unittest.TestCase):
+    def test_explanation_packet_formats_bank_in_millions_and_hides_native_v3_score(self):
+        from fpl_ai_manager.explainer import build_explanation_packet
+        players={1:{'web_name':'Out'},2:{'web_name':'In'}}
+        chosen={'plan_id':'p','transfers':[{'out':1,'in':2,'sell':45,'buy':40}], 'optimizer_score':10.0,'bank_after':25,'hit_cost':0,'chip':None}
+        comparison={'status':'available','v2_optimizer_score':130.95,'v3_path_score':110.88,'v2_transfers':[],'v3_transfers':[],
+                    'common_basis':{'status':'available','horizon_gws':3,'objective':'same','v2_score':100,'v3_score':101,'delta_v3_minus_v2':1,
+                                    'v2_first_gw_score':50,'v3_first_gw_score':51,'v2_bank_after_first':25,'v3_bank_after_first':14}}
+        packet=build_explanation_packet(chosen,None,{'transfer_signals':[]},comparison,players,{'items':[]},None)
+        self.assertEqual(packet['selected']['bank_after'],'£2.5m')
+        self.assertEqual(packet['selected']['transfers'][0]['sell_price'],'£4.5m')
+        self.assertNotIn('v2_optimizer_score',packet['v2_v3'])
+        self.assertNotIn('v3_path_score',packet['v2_v3'])
+        self.assertEqual(packet['v2_v3']['common_basis']['v3_bank_after_first'],'£1.4m')
+
+    def test_compare_marks_native_scores_not_comparable(self):
+        from fpl_ai_manager.decision_compare import compare_v2_v3
+        v2={'plan_id':'x','optimizer_score':130.95,'transfers':[]}
+        v3=[{'score':110.88,'first_action':{'roll':True,'transfers':[]},'steps':[]}]
+        c=compare_v2_v3(v2,v3)
+        self.assertFalse(c['native_scores_comparable'])
+        self.assertIn('different objectives',c['native_score_note'])

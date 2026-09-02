@@ -25,14 +25,20 @@ def render_report(gw,kind,delivery,mode,plan,decision,players,proj,base_plan=Non
             lines.append(f"- Probabilistic captaincy shadow: **{decision_audit['captaincy_shadow_status']}**")
             cs=decision_audit.get('captaincy_shadow') or {}
             cands=cs.get('candidates') or []
+            pair_rank=cs.get('captain_pair_rankings') or []
             if cs.get('captain') is not None:
                 cap=next((x for x in cands if int(x.get('player_id',-1))==int(cs['captain'])),{})
-                vice=next((x for x in cands if int(x.get('player_id',-1))==int(cs.get('vice_captain',-1))),{})
-                lines.append(f"- V3 captaincy shadow: **{player_name(cs['captain'],players)} (C)** / **{player_name(cs['vice_captain'],players)} (VC)**; captain utility {float(cap.get('utility',0)):.2f}, P(0 min) {float(cap.get('p_zero',0))*100:.1f}%.")
-                if len(cands)>1:
-                    altc=next((x for x in cands if int(x.get('player_id',-1))!=int(cs['captain'])),None)
-                    if altc:
-                        lines.append(f"- Next captain candidate: **{player_name(altc['player_id'],players)}**, utility {float(altc.get('utility',0)):.2f}.")
+                lines.append(f"- V3 captaincy shadow: **{player_name(cs['captain'],players)} (C)** / **{player_name(cs['vice_captain'],players)} (VC)**; pair value {float(cs.get('pair_value',0)):.2f}, captain utility {float(cap.get('utility',0)):.2f}, P(0 min) {float(cap.get('p_zero',0))*100:.1f}%.")
+                if len(pair_rank)>1:
+                    altp=pair_rank[1]
+                    lines.append(f"- Next captain/vice pair: **{player_name(altp['captain'],players)} (C)** / **{player_name(altp['best_vice'],players)} (VC)**; pair value {float(altp.get('pair_value',0)):.2f}, captain utility {float(altp.get('captain_utility',0)):.2f}.")
+                prod_cap=(plan.get('lineup') or {}).get('captain')
+                if prod_cap is not None:
+                    prod=next((x for x in cands if int(x.get('player_id',-1))==int(prod_cap)),None)
+                    if prod:
+                        rank=next((i+1 for i,x in enumerate(pair_rank) if int(x.get('captain',-1))==int(prod_cap)),None)
+                        rank_text=f", pair-rank #{rank}" if rank else ""
+                        lines.append(f"- Production captain audit: **{player_name(prod_cap,players)}**; individual utility {float(prod.get('utility',0)):.2f}, P(0 min) {float(prod.get('p_zero',0))*100:.1f}%{rank_text}.")
         if decision_audit.get("agreement"):
             lines.append(f"- V2/V3 agreement: {decision_audit['agreement']}")
         if decision_audit.get("wc_fh_policy"):
@@ -59,6 +65,19 @@ def render_report(gw,kind,delivery,mode,plan,decision,players,proj,base_plan=Non
                     lines.append(f"- V3 shadow GW{step.get('gw')} continuation: **{named}**")
                 elif step.get('roll'):
                     lines.append(f"- V3 shadow GW{step.get('gw')} continuation: **ROLL**")
+            cb=comp.get('common_basis') or {}
+            if cb.get('status')=='available':
+                delta=float(cb.get('delta_v3_minus_v2') or 0)
+                lines.append(
+                    f"- Common-basis comparison ({int(cb.get('horizon_gws') or 0)} GW probabilistic sequential objective): "
+                    f"V2 **{float(cb.get('v2_score') or 0):.2f}**, V3 **{float(cb.get('v3_score') or 0):.2f}**, "
+                    f"V3−V2 **{delta:+.2f}**. First-GW common score: V2 **{float(cb.get('v2_first_gw_score') or 0):.2f}**, "
+                    f"V3 **{float(cb.get('v3_first_gw_score') or 0):.2f}**."
+                )
+                if cb.get('v2_bank_after_first') is not None and cb.get('v3_bank_after_first') is not None:
+                    lines.append(f"- Common-basis bank after first action: V2 **{money(cb['v2_bank_after_first'])}**, V3 **{money(cb['v3_bank_after_first'])}**.")
+            else:
+                lines.append("- Native V2 optimizer score and V3 path score are **not directly comparable**; no common-basis route score was available for this run.")
             if decision.get('v2_v3_explanation'):
                 lines.append(f"- Why they differ: {decision['v2_v3_explanation']}")
         if decision_audit.get("equivalence_band_points") is not None:

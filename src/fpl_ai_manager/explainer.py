@@ -19,6 +19,8 @@ EXPLAIN_SCHEMA={
 SYSTEM="""You explain an already-final Fantasy Premier League recommendation.
 You have ZERO decision authority. Never change the selected plan, transfers, captain, vice-captain, bench, chip, bank, or prices. Never invent facts.
 Use player names supplied in the packet, never raw player IDs in user-facing prose.
+All money fields supplied to you are already human-readable GBP millions; reproduce them exactly and never reinterpret tenths.
+Never compare native V2 optimizer_score with native V3 path_score: they use different objectives/horizons. Use only the common_basis comparison when discussing which route projects better across V2 and V3.
 Explain why the deterministic plan was selected, especially equivalence-band flexibility or V2/V3 route differences. Treat tiny projection gaps as noise. Keep the explanation concise and practical. If news is degraded, say that this lowers confidence rather than implying negative news."""
 
 
@@ -26,26 +28,40 @@ def build_explanation_packet(chosen, alternative, decision, comparison, players_
     def name(pid):
         row=players_by_id.get(int(pid),{}) if pid is not None else {}
         return row.get('web_name') or row.get('name') or f'player {pid}'
+    def money(tenths):
+        if tenths is None: return None
+        return f"£{float(tenths)/10:.1f}m"
     def tx(plan):
-        return [{'out':name(t['out']),'in':name(t['in']),'sell':t.get('sell'),'buy':t.get('buy')} for t in (plan or {}).get('transfers',[])]
+        return [{'out':name(t['out']),'in':name(t['in']),'sell_price':money(t.get('sell')),'buy_price':money(t.get('buy'))} for t in (plan or {}).get('transfers',[])]
     comp=dict(comparison or {})
     comp['v2_transfers_named']=[{'out':name(t['out']),'in':name(t['in'])} for t in comp.get('v2_transfers',[])]
     comp['v3_transfers_named']=[{'out':name(t['out']),'in':name(t['in'])} for t in comp.get('v3_transfers',[])]
     comp['v3_future_steps_named']=[{
-        **{k:step.get(k) for k in ('gw','roll','chip','hit_cost','bank_after','free_transfers_after')},
+        **{k:step.get(k) for k in ('gw','roll','chip','hit_cost','free_transfers_after')},
+        'bank_after':money(step.get('bank_after')),
         'transfers':[{'out':name(t['out']),'in':name(t['in'])} for t in step.get('transfers',[])]
     } for step in comp.get('v3_future_steps',[])[:3]]
-    # Do not expose bulky raw V3 action structures to the explainer.
+    # Native V2/V3 scores are not comparable; keep them out of explanatory prose.
+    comp.pop('v2_optimizer_score',None); comp.pop('v3_path_score',None)
     comp.pop('v3_first_action',None); comp.pop('v3_planner_diagnostics',None)
+    comp['native_scores_comparable']=False
+    cb=comp.get('common_basis') or {}
+    if cb.get('status')=='available':
+        comp['common_basis']={
+            'status':'available','horizon_gws':cb.get('horizon_gws'),'objective':cb.get('objective'),
+            'v2_score':cb.get('v2_score'),'v3_score':cb.get('v3_score'),'delta_v3_minus_v2':cb.get('delta_v3_minus_v2'),
+            'v2_first_gw_score':cb.get('v2_first_gw_score'),'v3_first_gw_score':cb.get('v3_first_gw_score'),
+            'v2_bank_after_first':money(cb.get('v2_bank_after_first')),'v3_bank_after_first':money(cb.get('v3_bank_after_first')),
+        }
     sig=[]
     for s in decision.get('transfer_signals',[])[:8]:
         sig.append({**s,'out_name':name(s['out']),'in_name':name(s['in'])})
     alt={}
     if alternative:
-        alt={'plan_id':alternative.get('plan_id'),'transfers':tx(alternative),'optimizer_score':alternative.get('optimizer_score'),'bank_after':alternative.get('bank_after'),'hit_cost':alternative.get('hit_cost')}
+        alt={'plan_id':alternative.get('plan_id'),'transfers':tx(alternative),'optimizer_score':alternative.get('optimizer_score'),'bank_after':money(alternative.get('bank_after')),'hit_cost':alternative.get('hit_cost')}
     material=[{k:i.get(k) for k in ('player','status','confidence','claim','source_title')} for i in (news or {}).get('items',[]) if i.get('confidence') in {'HIGH','MEDIUM'}][:6]
     return {
-        'selected':{'plan_id':chosen.get('plan_id'),'transfers':tx(chosen),'optimizer_score':chosen.get('optimizer_score'),'bank_after':chosen.get('bank_after'),'hit_cost':chosen.get('hit_cost'),'chip':chosen.get('chip')},
+        'selected':{'plan_id':chosen.get('plan_id'),'transfers':tx(chosen),'optimizer_score':chosen.get('optimizer_score'),'bank_after':money(chosen.get('bank_after')),'hit_cost':chosen.get('hit_cost'),'chip':chosen.get('chip')},
         'alternative':alt,
         'equivalence_band':decision.get('equivalence_band'),'separation':decision.get('separation'),
         'transfer_signals':sig,

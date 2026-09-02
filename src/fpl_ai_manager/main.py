@@ -25,7 +25,7 @@ from .schedule import classify_window
 from .confidence import recommendation_confidence
 from .report_state import load as load_report_state,gw_state,mark_sent,mark_late_checked
 from .runtime import RuntimeBudget, stage
-from .decision_compare import compare_v2_v3
+from .decision_compare import compare_v2_v3, evaluate_common_basis
 from .backtest.snapshots import write_snapshot
 
 ROOT=Path(__file__).resolve().parents[2]
@@ -129,6 +129,7 @@ def main():
         projections=build_projections(players,teams,fixtures,gw,summaries,external,nidx,cfg["projection_horizon_gws"],team_rows=boot.get("teams",[]),season=cfg.get("season","2026/27"))
     proj_by_id={r["player_id"]:r for r in projections}
     multigw_shadow=[]
+    mg_state=None
     with stage("optimizer"):
         if state["mode"]=="gw1_initial_build":
             plans=initial_build_plans(players,players_by_id,proj_by_id,gw,cfg);base=None
@@ -173,6 +174,23 @@ def main():
     chip_map=opportunity_map(fixtures,teams,gw,cfg)
     plans=augment_with_chip_plans(plans,state,players,players_by_id,proj_by_id,gw,cfg,chip_map)
     v2_v3_comparison=compare_v2_v3(plans[0] if plans else None,multigw_shadow) if state["mode"] != "gw1_initial_build" else {"status":"not_applicable"}
+    if (state["mode"] != "gw1_initial_build" and v2_v3_comparison.get("status")=="available"
+            and mg_state is not None and multigw_shadow and budget.can_spend(10,reserve=180)):
+        try:
+            with stage("v2_v3_common_basis"):
+                common=evaluate_common_basis(
+                    plans[0],multigw_shadow[0],mg_state,players_by_id,projections,proj_by_id,
+                    horizon=min(3,int(mg_cfg.get("planning_horizon",4))),
+                    candidate_per_position=min(5,int(mg_cfg.get("candidate_per_position",8))),
+                    beam_width=min(20,int(mg_cfg.get("beam_width",60))),
+                    max_transfers_per_gw=min(2,int(mg_cfg.get("max_transfers_per_gw",2))),
+                    bench_weight=float(cfg.get("bench_weight",.2)),discount=float(mg_cfg.get("discount",.97)),
+                    runtime_budget_seconds=8,
+                )
+                v2_v3_comparison["common_basis"]=common
+        except Exception as exc:
+            v2_v3_comparison["common_basis"]={"status":"unavailable","reason":str(exc)}
+            state.setdefault("warnings",[]).append(f"V2/V3 common-basis comparison unavailable: {exc}")
     # WC/FH are intentionally shadow-only. Compare them with the best non-chip
     # sequential path under a bounded runtime, but never add them to production
     # optimizer_plans or allow the AI adjudicator to select them.

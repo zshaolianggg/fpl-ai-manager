@@ -132,10 +132,26 @@ def recommend_captaincy(
     pairs.sort(reverse=True)
     value, _, _, cap_id, vice_id = pairs[0]
     ranking = sorted(candidates.values(), key=lambda c: c.utility, reverse=True)
+
+    # The engine optimises the captain/vice PAIR, not captain utility alone.
+    # Expose a pair-consistent ranking so reports never claim that a lower
+    # individual-utility captain outranks a higher one without showing why.
+    best_by_captain = {}
+    for pair_value, cap_utility, vice_utility, candidate_cap, candidate_vice in pairs:
+        if candidate_cap not in best_by_captain:
+            best_by_captain[candidate_cap] = {
+                "captain": candidate_cap,
+                "best_vice": candidate_vice,
+                "pair_value": round(pair_value, 4),
+                "captain_utility": round(cap_utility, 4),
+                "vice_utility": round(vice_utility, 4),
+            }
+    pair_ranking = sorted(best_by_captain.values(), key=lambda x: x["pair_value"], reverse=True)
     return {
         "captain": cap_id,
         "vice_captain": vice_id,
         "expected_extra_points": round(captain_pair_value(candidates[cap_id], candidates[vice_id], triple_captain=triple_captain), 3),
         "pair_value": round(value, 3),
         "candidates": [x.as_dict() for x in ranking],
+        "captain_pair_rankings": pair_ranking,
     }
