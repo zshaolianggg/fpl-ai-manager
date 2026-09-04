@@ -12,6 +12,13 @@ from .set_pieces import infer_set_piece_role
 PRIOR_XG90 = {1:0.01,2:0.05,3:0.18,4:0.32}
 PRIOR_XA90 = {1:0.01,2:0.08,3:0.16,4:0.12}
 
+# Historical attacking observations are converted to a neutral-fixture basis
+# before future matchup strength is applied. Keep this correction deliberately
+# bounded: early-season team ratings are useful priors, not precise truth.
+HIST_ATTACK_MULT_MIN = 0.80
+HIST_ATTACK_MULT_MAX = 1.20
+NEUTRAL_ATTACK_XG = 1.35
+
 
 def _num(x, default=0.0):
     try: return float(x)
@@ -54,7 +61,78 @@ def _understat_rates(row, pos):
     return 90*_num(row.get("xG"))/mins, 90*_num(row.get("xA"))/mins, mins
 
 
-def attacking_rates(player, ext_current, ext_prior):
+def _historical_attack_multiplier(team_id, opponent_team, was_home, strengths):
+    """Expected attacking environment for one already-played fixture.
+
+    The same shrunk team/matchup model used for future fixtures is used here,
+    but the historical correction is capped more tightly (0.80-1.20). This
+    avoids overreacting to noisy early-season FPL strength ratings.
+    """
+    if not strengths or not team_id or not opponent_team:
+        return 1.0
+    try:
+        team_id = int(team_id)
+        opponent_team = int(opponent_team)
+    except (TypeError, ValueError):
+        return 1.0
+    if bool(was_home):
+        fx = fixture_expectation(team_id, opponent_team, strengths)
+        own_xg = fx.home_xg
+    else:
+        fx = fixture_expectation(opponent_team, team_id, strengths)
+        own_xg = fx.away_xg
+    shrunk = 0.5 + 0.5*(own_xg/NEUTRAL_ATTACK_XG)
+    return max(HIST_ATTACK_MULT_MIN, min(HIST_ATTACK_MULT_MAX, shrunk))
+
+
+def _normalized_fpl_history_rates(history, pos, team_id, strengths):
+    """Return neutral-fixture xG/xA rates from current-season match rows.
+
+    Each played match is divided by its bounded attacking-environment
+    multiplier. A minute-weighted exposure factor is also returned so the
+    current-season Understat aggregate can receive the same schedule correction
+    without fetching hundreds of extra player-match pages.
+    """
+    mins_total = raw_xg = raw_xa = norm_xg = norm_xa = 0.0
+    exposure_weighted = 0.0
+    usable = 0
+    for row in list(history or []):
+        mins = _num(row.get("minutes"))
+        if mins <= 0:
+            continue
+        has_xg = "expected_goals" in row or "xG" in row
+        has_xa = "expected_assists" in row or "xA" in row
+        if not (has_xg or has_xa):
+            continue
+        xg = _num(row.get("expected_goals", row.get("xG")))
+        xa = _num(row.get("expected_assists", row.get("xA")))
+        mult = _historical_attack_multiplier(
+            team_id, row.get("opponent_team"), row.get("was_home"), strengths
+        )
+        mins_total += mins
+        raw_xg += xg
+        raw_xa += xa
+        norm_xg += xg/max(0.01, mult)
+        norm_xa += xa/max(0.01, mult)
+        exposure_weighted += mins/max(0.01, mult)
+        usable += 1
+    if mins_total <= 0 or usable <= 0:
+        return None
+    return {
+        "raw_xg90": 90*raw_xg/mins_total,
+        "raw_xa90": 90*raw_xa/mins_total,
+        "normalized_xg90": 90*norm_xg/mins_total,
+        "normalized_xa90": 90*norm_xa/mins_total,
+        "exposure_factor": exposure_weighted/mins_total,
+        "minutes": mins_total,
+        "matches": usable,
+    }
+
+
+def attacking_rates(
+    player, ext_current, ext_prior, *, history=None, strengths=None,
+    team_id=None, return_diagnostics=False
+):
     pos = int(player["element_type"])
     key = norm_name(player.get("web_name"))
     cur = ext_current.get(key)
@@ -63,18 +141,55 @@ def attacking_rates(player, ext_current, ext_prior):
     pxg,pxa,pmins = _understat_rates(prior,pos)
     fmins = _num(player.get("minutes"))
     if fmins > 0:
-        fxg = 90*_num(player.get("expected_goals"))/fmins
-        fxa = 90*_num(player.get("expected_assists"))/fmins
+        raw_fxg = 90*_num(player.get("expected_goals"))/fmins
+        raw_fxa = 90*_num(player.get("expected_assists"))/fmins
     else:
-        fxg,fxa = PRIOR_XG90[pos],PRIOR_XA90[pos]
+        raw_fxg,raw_fxa = PRIOR_XG90[pos],PRIOR_XA90[pos]
+
+    hist = _normalized_fpl_history_rates(
+        history, pos, team_id or player.get("team"), strengths
+    )
+    if hist:
+        # Prefer the match-level FPL rate because it lets us normalize the exact
+        # fixtures in which the player appeared. Apply the minute-weighted same
+        # schedule correction to Understat's current aggregate before blending.
+        fxg = hist["normalized_xg90"]
+        fxa = hist["normalized_xa90"]
+        exposure = max(HIST_ATTACK_MULT_MIN, min(HIST_ATTACK_MULT_MAX, hist["exposure_factor"]))
+        adj_cxg = cxg*exposure
+        adj_cxa = cxa*exposure
+        normalization_method = "match_level_fpl_plus_understat_exposure"
+    else:
+        fxg, fxa = raw_fxg, raw_fxa
+        adj_cxg, adj_cxa = cxg, cxa
+        exposure = 1.0
+        normalization_method = "aggregate_fallback"
+
     current_weight = min(0.80, max(fmins,cmins)/900.0)
-    live_xg = (fxg + cxg)/2 if cmins else fxg
-    live_xa = (fxa + cxa)/2 if cmins else fxa
+    live_xg = (fxg + adj_cxg)/2 if cmins else fxg
+    live_xa = (fxa + adj_cxa)/2 if cmins else fxa
+    # Prior-season Understat is league-aggregate data. A full EPL season has a
+    # near-balanced schedule, so we retain it as the stabilizing prior rather
+    # than pretending we have match-level opponent context that we do not have.
     prior_xg = pxg if pmins else PRIOR_XG90[pos]
     prior_xa = pxa if pmins else PRIOR_XA90[pos]
     xg90 = current_weight*live_xg + (1-current_weight)*prior_xg
     xa90 = current_weight*live_xa + (1-current_weight)*prior_xa
-    return max(0,xg90), max(0,xa90), ("MEDIUM" if current_weight >= .35 else "LOW")
+    conf = "MEDIUM" if current_weight >= .35 else "LOW"
+    diagnostics = {
+        "method": normalization_method,
+        "historical_schedule_adjusted": bool(hist),
+        "matches_adjusted": int(hist["matches"]) if hist else 0,
+        "minutes_adjusted": round(hist["minutes"], 1) if hist else 0.0,
+        "understat_current_exposure_factor": round(exposure, 3),
+        "raw_fpl_xg90": round(raw_fxg, 3),
+        "raw_fpl_xa90": round(raw_fxa, 3),
+        "normalized_fpl_xg90": round(fxg, 3),
+        "normalized_fpl_xa90": round(fxa, 3),
+        "prior_season_normalization": "aggregate_prior_retained",
+    }
+    result = (max(0,xg90), max(0,xa90), conf)
+    return (*result, diagnostics) if return_diagnostics else result
 
 
 @dataclass(frozen=True)
@@ -263,7 +378,10 @@ def build_projections(
         hist=(summaries.get(pid) or {}).get("history",[])
         prior=external.get("prior",{}).get(norm_name(p.get("web_name")))
         base_mp = project_minutes(p,hist,prior,news_index)
-        xg90,xa90,rate_conf=attacking_rates(p,external.get("current",{}),external.get("prior",{}))
+        xg90,xa90,rate_conf,rate_diag=attacking_rates(
+            p,external.get("current",{}),external.get("prior",{}),
+            history=hist,strengths=strengths,team_id=int(p["team"]),return_diagnostics=True
+        )
         set_piece_role = infer_set_piece_role(p)
         per={}
         fixture_detail=[]
@@ -293,6 +411,7 @@ def build_projections(
             # V3-rich evidence.
             "minutes_projection":base_mp.as_dict(),"projection_confidence":round(conf_score,3),
             "set_piece_role":asdict(set_piece_role),"scoring_season":rules.season,
+            "attacking_rate_normalization":rate_diag,
             "fixtures":fixture_detail,"status":p.get("status"),"selected_by_percent":p.get("selected_by_percent")
         })
     return rows

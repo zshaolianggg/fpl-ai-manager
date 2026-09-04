@@ -6,6 +6,9 @@ from fpl_ai_manager.projections import (
     defensive_action_rate90,
     expected_defensive_contribution_points,
     project_fixture,
+    attacking_rates,
+    HIST_ATTACK_MULT_MIN,
+    HIST_ATTACK_MULT_MAX,
 )
 
 
@@ -50,6 +53,68 @@ class V3ProjectionEngineTests(unittest.TestCase):
         self.assertGreater(defensive_action_rate90(history,2),10)
         pts=expected_defensive_contribution_points(history,2,mp,rules)
         self.assertGreater(pts,0.8)
+
+
+    def test_historical_xg_is_normalized_for_fixture_environment(self):
+        team_rows = [
+            {"id":1,"strength_attack_home":1000,"strength_attack_away":1000,"strength_defence_home":1000,"strength_defence_away":1000},
+            {"id":2,"strength_attack_home":1000,"strength_attack_away":1000,"strength_defence_home":1700,"strength_defence_away":1700},
+            {"id":3,"strength_attack_home":1000,"strength_attack_away":1000,"strength_defence_home":600,"strength_defence_away":600},
+        ]
+        strengths = build_team_strengths(team_rows)
+        player = {
+            "web_name":"Test Mid", "element_type":3, "team":1, "minutes":90,
+            "expected_goals":"0.40", "expected_assists":"0.20",
+        }
+        hard_history = [{
+            "minutes":90,"opponent_team":2,"was_home":True,
+            "expected_goals":"0.40","expected_assists":"0.20",
+        }]
+        easy_history = [{
+            "minutes":90,"opponent_team":3,"was_home":True,
+            "expected_goals":"0.40","expected_assists":"0.20",
+        }]
+        _,_,_,hard = attacking_rates(
+            player,{}, {},history=hard_history,strengths=strengths,return_diagnostics=True
+        )
+        _,_,_,easy = attacking_rates(
+            player,{}, {},history=easy_history,strengths=strengths,return_diagnostics=True
+        )
+        self.assertGreater(hard["normalized_fpl_xg90"], hard["raw_fpl_xg90"])
+        self.assertLess(easy["normalized_fpl_xg90"], easy["raw_fpl_xg90"])
+        self.assertGreater(hard["normalized_fpl_xa90"], hard["raw_fpl_xa90"])
+        self.assertLess(easy["normalized_fpl_xa90"], easy["raw_fpl_xa90"])
+
+    def test_historical_schedule_adjustment_is_bounded(self):
+        team_rows = [
+            {"id":1,"strength_attack_home":1000,"strength_attack_away":1000,"strength_defence_home":1000,"strength_defence_away":1000},
+            {"id":2,"strength_attack_home":1000,"strength_attack_away":1000,"strength_defence_home":10000,"strength_defence_away":10000},
+            {"id":3,"strength_attack_home":1000,"strength_attack_away":1000,"strength_defence_home":100,"strength_defence_away":100},
+        ]
+        strengths = build_team_strengths(team_rows)
+        player = {
+            "web_name":"Test Fwd", "element_type":4, "team":1, "minutes":90,
+            "expected_goals":"0.50", "expected_assists":"0.10",
+        }
+        for opponent in (2,3):
+            hist=[{
+                "minutes":90,"opponent_team":opponent,"was_home":True,
+                "expected_goals":"0.50","expected_assists":"0.10",
+            }]
+            _,_,_,diag=attacking_rates(
+                player,{}, {},history=hist,strengths=strengths,return_diagnostics=True
+            )
+            factor=diag["understat_current_exposure_factor"]
+            self.assertGreaterEqual(factor, HIST_ATTACK_MULT_MIN)
+            self.assertLessEqual(factor, HIST_ATTACK_MULT_MAX)
+
+    def test_attacking_rates_remains_backward_compatible_without_history(self):
+        player={
+            "web_name":"Test", "element_type":3, "minutes":180,
+            "expected_goals":"0.40", "expected_assists":"0.20",
+        }
+        result=attacking_rates(player,{}, {})
+        self.assertEqual(len(result),3)
 
     def test_goalkeeper_goal_uses_ten_points(self):
         rules=rules_for_season("2026/27")
