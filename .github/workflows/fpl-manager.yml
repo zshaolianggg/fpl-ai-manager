@@ -76,6 +76,7 @@ jobs:
           key: fpl-manager-state-main-${{ github.run_id }}
           restore-keys: |
             fpl-manager-state-main-
+            fpl-manager-state-
 
       - name: Check whether a report is due
         id: preflight
@@ -114,4 +115,4 @@ jobs:
           path: |
             .state
             .cache
-          key: fpl-manager-state-${{ github.run_id }}
+          key: fpl-manager-state-main-${{ github.run_id }}
