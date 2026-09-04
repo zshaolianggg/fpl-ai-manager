@@ -3,7 +3,12 @@ from __future__ import annotations
 from itertools import permutations
 from math import prod
 
-from .captaincy import recommend_captaincy
+from .captaincy import recommend_captaincy, correlation_discount
+
+# A hedge-value vice swap only replaces the raw-highest-points alternative when
+# it does not give up more than this many expected points, so diversification
+# never quietly costs meaningful expected value.
+VICE_HEDGE_MAX_POINTS_GIVEUP = 1.0
 
 CONFIDENCE_FACTOR = {"HIGH": 1.00, "MEDIUM": 0.96, "LOW": 0.88}
 
@@ -78,12 +83,28 @@ def _captain_with_audit(starters, proj_by_id, gw):
                 top = eo_anchor
                 reason = "low-confidence premium-anchor rule: the projected edge over the premium attacker was too small to justify extra captaincy risk"
     remaining_attackers = [x for x in attackers if x[0] != top[0]]
-    vice = remaining_attackers[0] if remaining_attackers else next(x for x in ranked if x[0] != top[0])
+    vice_disc = 0.0
+    if remaining_attackers:
+        cap_row = proj_by_id[top[0]]
+        pool = remaining_attackers[:4]
+        best_raw = pool[0]
+
+        def hedge_value(cand):
+            disc = correlation_discount(cap_row, proj_by_id[cand[0]], gw)
+            return cand[1]*(1.0-disc)
+
+        vice = max(pool, key=hedge_value)
+        if vice[0] != best_raw[0] and best_raw[1]-vice[1] > VICE_HEDGE_MAX_POINTS_GIVEUP:
+            vice = best_raw
+        vice_disc = correlation_discount(cap_row, proj_by_id[vice[0]], gw)
+    else:
+        vice = next(x for x in ranked if x[0] != top[0])
     audit = {
         "captain": int(top[0]), "vice_captain": int(vice[0]), "reason": reason,
         "raw_top": int(raw_top[0]),
         "captain_robust_points": round(robust_points(proj_by_id[top[0]], gw), 3),
         "raw_top_robust_points": round(robust_points(proj_by_id[raw_top[0]], gw), 3),
+        "vice_correlation_discount": round(vice_disc, 3),
     }
     return top, vice, audit
 

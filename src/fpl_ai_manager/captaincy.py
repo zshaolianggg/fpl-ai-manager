@@ -102,11 +102,41 @@ def candidate(row: dict, gw: int, *, downside_penalty: float = 0.08, upside_bonu
     )
 
 
-def captain_pair_value(cap: CaptaincyCandidate, vice: CaptaincyCandidate, *, triple_captain: bool = False) -> float:
+def correlation_discount(
+    cap_row: dict, vice_row: dict, gw: int, *,
+    same_team_penalty: float = 0.35, same_match_penalty: float = 0.20,
+) -> float:
+    """Estimate shared-outcome risk between a captain/vice pair this gameweek.
+
+    A vice from the captain's own team is highly correlated with the captain
+    (a bad attacking day suppresses both), and a vice facing the captain's team
+    in the same match is also correlated (a low-scoring match suppresses both
+    sides). Either case makes the vice a weaker hedge than an independent
+    alternative, so the vice's insurance value is discounted rather than taken
+    at face value.
+    """
+    cap_team = int(cap_row.get("team_id") or 0)
+    vice_team = int(vice_row.get("team_id") or 0)
+    if cap_team and cap_team == vice_team:
+        return same_team_penalty
+    opponents = {
+        int(f["opponent"]) for f in cap_row.get("fixtures", [])
+        if int(f.get("gw") or -1) == int(gw) and f.get("opponent") is not None
+    }
+    if vice_team and vice_team in opponents:
+        return same_match_penalty
+    return 0.0
+
+
+def captain_pair_value(
+    cap: CaptaincyCandidate, vice: CaptaincyCandidate, *,
+    triple_captain: bool = False, correlation_discount: float = 0.0,
+) -> float:
     # Use calibrated captain utility for ranking, with vice value only when the
     # captain records zero minutes. Expected-extra-points is reported separately.
     multiplier = 2 if triple_captain else 1
-    return multiplier*(cap.utility + cap.p_zero*vice.utility)
+    effective_vice_utility = vice.utility*(1.0-correlation_discount)
+    return multiplier*(cap.utility + cap.p_zero*effective_vice_utility)
 
 def captain_pair_expected_points(cap: CaptaincyCandidate, vice: CaptaincyCandidate, *, triple_captain: bool = False) -> float:
     multiplier = 2 if triple_captain else 1
@@ -123,6 +153,8 @@ def recommend_captaincy(
     upside_bonus: float = 0.03,
     prefer_attackers: bool = True,
     defender_override_margin: float = 1.25,
+    same_team_correlation_penalty: float = 0.35,
+    same_match_correlation_penalty: float = 0.20,
 ):
     ids = [int(x) for x in starter_ids]
     candidates = {pid: candidate(proj_by_id[pid], gw, downside_penalty=downside_penalty, upside_bonus=upside_bonus) for pid in ids}
@@ -133,7 +165,11 @@ def recommend_captaincy(
             if vice_id == cap_id:
                 continue
             vice = candidates[vice_id]
-            value = captain_pair_value(cap, vice, triple_captain=triple_captain)
+            disc = correlation_discount(
+                proj_by_id[cap_id], proj_by_id[vice_id], gw,
+                same_team_penalty=same_team_correlation_penalty, same_match_penalty=same_match_correlation_penalty,
+            )
+            value = captain_pair_value(cap, vice, triple_captain=triple_captain, correlation_discount=disc)
             # Keep the existing safety philosophy without hard-banning a truly
             # exceptional defender/GK projection.
             if prefer_attackers and int(proj_by_id[cap_id]["position"]) in {1, 2}:
@@ -143,18 +179,18 @@ def recommend_captaincy(
                 )
                 if cap.utility < best_attack_utility + defender_override_margin:
                     value -= 2.0
-            pairs.append((value, cap.utility, vice.utility, cap_id, vice_id))
+            pairs.append((value, cap.utility, vice.utility, cap_id, vice_id, disc))
     if not pairs:
         raise ValueError("Captaincy requires at least two starters")
     pairs.sort(reverse=True)
-    value, _, _, cap_id, vice_id = pairs[0]
+    value, _, _, cap_id, vice_id, _ = pairs[0]
     ranking = sorted(candidates.values(), key=lambda c: c.utility, reverse=True)
 
     # The engine optimises the captain/vice PAIR, not captain utility alone.
     # Expose a pair-consistent ranking so reports never claim that a lower
     # individual-utility captain outranks a higher one without showing why.
     best_by_captain = {}
-    for pair_value, cap_utility, vice_utility, candidate_cap, candidate_vice in pairs:
+    for pair_value, cap_utility, vice_utility, candidate_cap, candidate_vice, pair_disc in pairs:
         if candidate_cap not in best_by_captain:
             best_by_captain[candidate_cap] = {
                 "captain": candidate_cap,
@@ -162,6 +198,7 @@ def recommend_captaincy(
                 "pair_value": round(pair_value, 4),
                 "captain_utility": round(cap_utility, 4),
                 "vice_utility": round(vice_utility, 4),
+                "vice_correlation_discount": round(pair_disc, 3),
             }
     pair_ranking = sorted(best_by_captain.values(), key=lambda x: x["pair_value"], reverse=True)
     return {

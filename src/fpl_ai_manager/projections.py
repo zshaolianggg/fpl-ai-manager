@@ -7,7 +7,7 @@ from .stats import norm_name
 from .minutes import project_minutes, MinutesProjection
 from .rules import rules_for_season, ScoringRules
 from .team_model import build_team_strengths, fixture_expectation, FixtureExpectation
-from .set_pieces import infer_set_piece_role
+from .set_pieces import infer_set_piece_role, penalty_goals_current_season
 
 PRIOR_XG90 = {1:0.01,2:0.05,3:0.18,4:0.32}
 PRIOR_XA90 = {1:0.01,2:0.08,3:0.16,4:0.12}
@@ -131,7 +131,7 @@ def _normalized_fpl_history_rates(history, pos, team_id, strengths):
 
 def attacking_rates(
     player, ext_current, ext_prior, *, history=None, strengths=None,
-    team_id=None, return_diagnostics=False
+    team_id=None, penalty_confirmed=False, return_diagnostics=False
 ):
     pos = int(player["element_type"])
     key = norm_name(player.get("web_name"))
@@ -166,6 +166,11 @@ def attacking_rates(
         normalization_method = "aggregate_fallback"
 
     current_weight = min(0.80, max(fmins,cmins)/900.0)
+    if penalty_confirmed:
+        # A confirmed current-season penalty conversion is strong, low-variance
+        # evidence of the current role; do not let a thin-minutes sample get
+        # diluted back toward a generic prior that predates the penalty duty.
+        current_weight = max(current_weight, 0.55)
     live_xg = (fxg + adj_cxg)/2 if cmins else fxg
     live_xa = (fxa + adj_cxa)/2 if cmins else fxa
     # Prior-season Understat is league-aggregate data. A full EPL season has a
@@ -187,6 +192,7 @@ def attacking_rates(
         "normalized_fpl_xg90": round(fxg, 3),
         "normalized_fpl_xa90": round(fxa, 3),
         "prior_season_normalization": "aggregate_prior_retained",
+        "penalty_taker_confirmed_current_season": bool(penalty_confirmed),
     }
     result = (max(0,xg90), max(0,xa90), conf)
     return (*result, diagnostics) if return_diagnostics else result
@@ -365,24 +371,43 @@ def project_fixture(
     )
 
 
+def _team_penalty_goals(players, understat_current):
+    """Aggregate current-season penalty goals by team for share estimation."""
+    out = {}
+    for p in players:
+        goals = penalty_goals_current_season(p, understat_current or {})
+        if goals <= 0:
+            continue
+        tid = int(p.get("team") or 0)
+        out[tid] = out.get(tid, 0.0)+goals
+    return out
+
+
 def build_projections(
     players, teams, fixtures, next_gw, summaries, external, news_index, horizon=8,
-    team_rows=None, season="2026/27"
+    team_rows=None, season="2026/27", team_strength_cfg=None
 ):
     fmap = fixture_map(fixtures, teams, next_gw, horizon)
     rules = rules_for_season(season)
-    strengths = build_team_strengths(team_rows)
+    ts_cfg = team_strength_cfg or {}
+    strengths = build_team_strengths(
+        team_rows, external.get("current_teams"), external.get("prior_teams"),
+        half_life_days=float(ts_cfg.get("understat_half_life_days", 200.0)),
+        prior_pseudo_weight=float(ts_cfg.get("understat_prior_pseudo_weight", 6.0)),
+    )
+    team_pens = _team_penalty_goals(players, external.get("current", {}))
     rows=[]
     for p in players:
         pid=int(p["id"])
         hist=(summaries.get(pid) or {}).get("history",[])
         prior=external.get("prior",{}).get(norm_name(p.get("web_name")))
         base_mp = project_minutes(p,hist,prior,news_index)
+        set_piece_role = infer_set_piece_role(p,external.get("current",{}),team_pens)
         xg90,xa90,rate_conf,rate_diag=attacking_rates(
             p,external.get("current",{}),external.get("prior",{}),
-            history=hist,strengths=strengths,team_id=int(p["team"]),return_diagnostics=True
+            history=hist,strengths=strengths,team_id=int(p["team"]),
+            penalty_confirmed=set_piece_role.is_penalty_taker,return_diagnostics=True
         )
-        set_piece_role = infer_set_piece_role(p)
         per={}
         fixture_detail=[]
         team_fixtures=fmap.get(int(p["team"]),[])

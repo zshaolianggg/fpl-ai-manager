@@ -93,6 +93,10 @@
     "understat_enabled": true,
     "cache_hours": 8
   },
+  "team_strength": {
+    "understat_half_life_days": 200.0,
+    "understat_prior_pseudo_weight": 6.0
+  },
   "chips": {
     "scan_to_half_end": true,
     "free_hit_early_threshold": 18.0,
@@ -137,7 +141,9 @@
     "probabilistic_shadow": true,
     "downside_penalty": 0.08,
     "upside_bonus": 0.03,
-    "probabilistic_defender_override_margin": 1.25
+    "probabilistic_defender_override_margin": 1.25,
+    "vice_same_team_correlation_penalty": 0.35,
+    "vice_same_match_correlation_penalty": 0.20
   },
   "gw1": {
     "hold_all_chips": true,

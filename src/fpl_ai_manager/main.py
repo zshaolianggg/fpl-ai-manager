@@ -127,7 +127,7 @@ def main():
     with stage("external_stats"):
         external,warn_stats=load_external_stats({**cfg["stats"],"cache_dir":cfg["stats_cache_dir"]},season_start_year(cfg.get("season", "2026/27")))
     with stage("projections"):
-        projections=build_projections(players,teams,fixtures,gw,summaries,external,nidx,cfg["projection_horizon_gws"],team_rows=boot.get("teams",[]),season=cfg.get("season","2026/27"))
+        projections=build_projections(players,teams,fixtures,gw,summaries,external,nidx,cfg["projection_horizon_gws"],team_rows=boot.get("teams",[]),season=cfg.get("season","2026/27"),team_strength_cfg=cfg.get("team_strength",{}))
     proj_by_id={r["player_id"]:r for r in projections}
     multigw_shadow=[]
     mg_state=None
@@ -170,6 +170,8 @@ def main():
                 downside_penalty=float(cap_cfg.get("downside_penalty",.08)),
                 upside_bonus=float(cap_cfg.get("upside_bonus",.03)),
                 defender_override_margin=float(cap_cfg.get("probabilistic_defender_override_margin",1.25)),
+                same_team_correlation_penalty=float(cap_cfg.get("vice_same_team_correlation_penalty",.35)),
+                same_match_correlation_penalty=float(cap_cfg.get("vice_same_match_correlation_penalty",.20)),
             )
         except Exception as exc:
             state.setdefault("warnings",[]).append(f"V3 probabilistic captaincy shadow unavailable: {exc}")
