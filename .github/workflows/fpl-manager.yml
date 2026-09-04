@@ -1,4 +1,4 @@
-name: FPL AI Manager - Lisa
+name: FPL AI Manager - Yannick
 
 on:
   workflow_dispatch:
@@ -16,17 +16,17 @@ on:
         description: "Who triggered this run"
         required: false
         type: string
-        default: "manual-friend"
+        default: "manual-friend2"
 
 permissions:
   contents: read
 
 concurrency:
-  group: fpl-ai-manager-friend
+  group: fpl-ai-manager-friend2
   cancel-in-progress: false
 
 env:
-  FPL_TEAM_ID: "5117429"
+  FPL_TEAM_ID: "4219581"
   FPL_TIMEZONE: "Asia/Shanghai"
   OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-5' }}
 
@@ -39,7 +39,7 @@ jobs:
       - name: Scheduler diagnostics
         shell: bash
         env:
-          TRIGGER_SOURCE: ${{ inputs.trigger_source || 'manual-friend' }}
+          TRIGGER_SOURCE: ${{ inputs.trigger_source || 'manual-friend2' }}
           FORCE_REPORT_INPUT: ${{ inputs.force_report || '' }}
         run: |
           echo "utc_now=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
@@ -64,15 +64,15 @@ jobs:
       - name: Install FPL AI Manager
         run: pip install -e .
 
-      - name: Restore friend's persistent manager state
+      - name: Restore Friend 2 persistent manager state
         uses: actions/cache/restore@v4
         with:
           path: |
             .state
             .cache
-          key: fpl-manager-state-friend-${{ github.run_id }}
+          key: fpl-manager-state-friend2-${{ github.run_id }}
           restore-keys: |
-            fpl-manager-state-friend-
+            fpl-manager-state-friend2-
 
       - name: Check whether a report is due
         id: preflight
@@ -88,7 +88,7 @@ jobs:
           echo "gw=${{ steps.preflight.outputs.gw }}"
           echo "delivery_mode=${{ steps.preflight.outputs.delivery_mode }}"
 
-      - name: Generate and email friend's recommendation
+      - name: Generate and email Friend 2 recommendation
         if: steps.preflight.outputs.due == 'true'
         timeout-minutes: 20
         env:
@@ -104,11 +104,11 @@ jobs:
           DELIVERY_MODE: ${{ steps.preflight.outputs.delivery_mode }}
         run: python -m fpl_ai_manager.main
 
-      - name: Save friend's persistent manager state
+      - name: Save Friend 2 persistent manager state
         if: always() && steps.preflight.outputs.due == 'true'
         uses: actions/cache/save@v4
         with:
           path: |
             .state
             .cache
-          key: fpl-manager-state-friend-${{ github.run_id }}
+          key: fpl-manager-state-friend2-${{ github.run_id }}
