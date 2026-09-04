@@ -1,11 +1,6 @@
-name: FPL AI Manager
+name: FPL AI Manager - Lisa
 
 on:
-  # Backup scheduler only.
-  # Cloudflare Cron should be the primary scheduler and call workflow_dispatch.
-  schedule:
-    - cron: "17 * * * *"
-
   workflow_dispatch:
     inputs:
       force_report:
@@ -21,17 +16,17 @@ on:
         description: "Who triggered this run"
         required: false
         type: string
-        default: "manual"
+        default: "manual-friend"
 
 permissions:
   contents: read
 
 concurrency:
-  group: fpl-ai-manager
+  group: fpl-ai-manager-friend
   cancel-in-progress: false
 
 env:
-  FPL_TEAM_ID: "6000549"
+  FPL_TEAM_ID: "5117429"
   FPL_TIMEZONE: "Asia/Shanghai"
   OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-5' }}
 
@@ -44,7 +39,7 @@ jobs:
       - name: Scheduler diagnostics
         shell: bash
         env:
-          TRIGGER_SOURCE: ${{ inputs.trigger_source || github.event_name }}
+          TRIGGER_SOURCE: ${{ inputs.trigger_source || 'manual-friend' }}
           FORCE_REPORT_INPUT: ${{ inputs.force_report || '' }}
         run: |
           echo "utc_now=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
@@ -52,8 +47,10 @@ jobs:
           echo "run_id=${{ github.run_id }}"
           echo "run_attempt=${{ github.run_attempt }}"
           echo "actor=${{ github.actor }}"
+          echo "ref=${{ github.ref }}"
           echo "trigger_source=${TRIGGER_SOURCE}"
           echo "force_report=${FORCE_REPORT_INPUT}"
+          echo "fpl_team_id=${FPL_TEAM_ID}"
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -67,15 +64,15 @@ jobs:
       - name: Install FPL AI Manager
         run: pip install -e .
 
-      - name: Restore persistent manager state
+      - name: Restore friend's persistent manager state
         uses: actions/cache/restore@v4
         with:
           path: |
             .state
             .cache
-          key: fpl-manager-state-${{ github.run_id }}
+          key: fpl-manager-state-friend-${{ github.run_id }}
           restore-keys: |
-            fpl-manager-state-
+            fpl-manager-state-friend-
 
       - name: Check whether a report is due
         id: preflight
@@ -91,7 +88,7 @@ jobs:
           echo "gw=${{ steps.preflight.outputs.gw }}"
           echo "delivery_mode=${{ steps.preflight.outputs.delivery_mode }}"
 
-      - name: Generate and email recommendation
+      - name: Generate and email friend's recommendation
         if: steps.preflight.outputs.due == 'true'
         timeout-minutes: 20
         env:
@@ -107,11 +104,11 @@ jobs:
           DELIVERY_MODE: ${{ steps.preflight.outputs.delivery_mode }}
         run: python -m fpl_ai_manager.main
 
-      - name: Save persistent manager state
+      - name: Save friend's persistent manager state
         if: always() && steps.preflight.outputs.due == 'true'
         uses: actions/cache/save@v4
         with:
           path: |
             .state
             .cache
-          key: fpl-manager-state-${{ github.run_id }}
+          key: fpl-manager-state-friend-${{ github.run_id }}
